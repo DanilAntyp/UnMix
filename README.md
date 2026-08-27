@@ -35,9 +35,31 @@ python3 -m venv .venv
 .venv/bin/python app.py     # opens http://localhost:5555
 ```
 
+The built frontend ships with the repo, so nothing needs installing for Node.
+
 The first separation downloads the Demucs weights (~80-300 MB) and the first
 karaoke run downloads the Whisper large-v3-turbo weights (~1.6 GB); after that
 everything runs offline. Separation uses the Apple GPU (MPS) when available.
+
+## Frontend
+
+The interface is a React app (Vite) in `web/`; Flask serves the production
+build out of `web/dist` on `/` and `/karaoke`, and owns every API route
+(`/yt`, `/separate`, `/convert`, `/karaoke/*`). That build is committed, so a
+plain `python app.py` needs no Node toolchain.
+
+To change the UI:
+
+```bash
+cd web
+npm install
+npm run dev      # http://localhost:5173, API calls proxied to :5555
+npm run build    # refresh web/dist, which is what app.py serves
+```
+
+Run `python app.py` alongside `npm run dev` — the dev server proxies the API
+to it, so separation, downloads and karaoke all work while hot-reloading.
+Commit the rebuilt `web/dist` along with your source changes.
 
 ## Command line
 
