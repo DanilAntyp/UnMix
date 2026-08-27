@@ -1,4 +1,5 @@
 import { useRef, useState } from 'react'
+import { Waveform } from './Waveform'
 
 /* ---------- inline stroke icons ---------- */
 const I = props => ({
@@ -91,7 +92,7 @@ export function MediaCard({ title, url, video, actions }) {
           <a className="chip" href={safe} download={name}>Download</a>
         </span>
       </div>
-      {video ? <video controls src={safe} /> : <audio controls src={safe} />}
+      {video ? <video controls src={safe} /> : <Waveform src={safe} height={72} />}
     </div>
   )
 }
