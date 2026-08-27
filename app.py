@@ -566,9 +566,19 @@ $('conv-go').addEventListener('click', async () => {
 </html>"""
 
 
+DIST = APP_DIR / "frontend" / "dist"
+
+
 @app.get("/")
 def index():
-    return PAGE
+    if (DIST / "index.html").exists():
+        return send_from_directory(DIST, "index.html")
+    return PAGE  # fallback: the old inline frontend
+
+
+@app.get("/assets/<path:name>")
+def dist_assets(name):
+    return send_from_directory(DIST / "assets", name)
 
 
 @app.post("/yt/info")

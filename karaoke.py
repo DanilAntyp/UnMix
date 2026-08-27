@@ -443,7 +443,11 @@ def karaoke_video(name):
 
 @bp.get("/karaoke")
 def karaoke_page():
-    return PAGE
+    dist_index = APP_DIR / "frontend" / "dist" / "index.html"
+    if dist_index.exists():
+        # The React app handles /karaoke?file=... itself.
+        return send_from_directory(dist_index.parent, "index.html")
+    return PAGE  # fallback: the old standalone page
 
 
 PAGE = """<!doctype html>
