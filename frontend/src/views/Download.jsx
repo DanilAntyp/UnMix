@@ -64,7 +64,16 @@ export function DownloadView({ onExtract, onKaraoke }) {
 
       {info && (
         <div className="fmt">
-          <div className="fmt-title">{info.title}</div>
+          <div className="fmt-head">
+            {info.thumbnail && <img src={info.thumbnail} alt="" />}
+            <div>
+              <div className="fmt-name">{info.title}</div>
+              <div className="fmt-meta">
+                {info.channel}{info.channel && info.duration ? ' · ' : ''}
+                {info.duration ? `${Math.floor(info.duration / 60)}:${String(Math.floor(info.duration % 60)).padStart(2, '0')}` : ''}
+              </div>
+            </div>
+          </div>
           <table>
             <tbody>
               <tr><th colSpan={3}>Audio</th></tr>

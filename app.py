@@ -602,12 +602,12 @@ def yt_info():
         {"label": "128k (.mp3)", "abr": 128, "size": duration * 128_000 / 8},
     ]
 
-    # Best mp4/avc1 stream per common resolution, plus ~129k audio on top.
+    # Best stream per available resolution (prefer mp4/avc1), plus ~129k audio.
     audio_extra = duration * 129_000 / 8
     by_height = {}
     for f in info.get("formats", []):
         h = f.get("height")
-        if h not in (1080, 720, 480, 360) or f.get("vcodec", "none") == "none":
+        if not h or f.get("vcodec", "none") == "none":
             continue
         is_avc_mp4 = f.get("ext") == "mp4" and (f.get("vcodec") or "").startswith("avc1")
         size = (f.get("filesize") or f.get("filesize_approx")
@@ -620,7 +620,9 @@ def yt_info():
         for h, (_rank, s) in sorted(by_height.items(), reverse=True)
     ]
 
-    return jsonify(title=info.get("title", "video"), audio=audio, video=video)
+    return jsonify(title=info.get("title", "video"), audio=audio, video=video,
+                   thumbnail=info.get("thumbnail"),
+                   duration=duration, channel=info.get("channel") or info.get("uploader"))
 
 
 @app.post("/yt")

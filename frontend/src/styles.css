@@ -199,7 +199,16 @@ input[type=file] { display: none; }
 
 /* ---------- format table ---------- */
 .fmt { margin-top: 20px; border-radius: 14px; overflow: hidden; border: 1px solid var(--hairline-soft); }
-.fmt-title { padding: 13px 18px; font-weight: 600; font-size: 0.93rem; background: var(--panel-2); }
+.fmt-head {
+  display: flex; align-items: center; gap: 16px;
+  padding: 14px 18px; background: var(--panel-2);
+}
+.fmt-head img {
+  width: 128px; aspect-ratio: 16 / 9; object-fit: cover;
+  border-radius: 9px; flex-shrink: 0; background: #000;
+}
+.fmt-name { font-weight: 600; font-size: 0.95rem; letter-spacing: -0.01em; }
+.fmt-meta { color: var(--muted); font-size: 0.82rem; margin-top: 4px; }
 .fmt table { width: 100%; border-collapse: collapse; font-size: 0.9rem; }
 .fmt th {
   text-align: left; padding: 9px 18px; background: rgba(255, 255, 255, 0.05);
