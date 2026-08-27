@@ -3,6 +3,7 @@ import { postJSON, pollProgress, fmtMB } from '../api'
 import { Status, MediaCard, PanelHead, IconDownload } from '../ui'
 import { Waveform } from '../Waveform'
 import { ConvertControls } from '../ConvertControls'
+import { LiquidMetalButton } from '../LiquidMetalButton'
 
 export function DownloadView({ onExtract, onKaraoke }) {
   const [url, setUrl] = useState('')
@@ -55,10 +56,8 @@ export function DownloadView({ onExtract, onKaraoke }) {
         onChange={e => setUrl(e.target.value)}
         onKeyDown={e => e.key === 'Enter' && getFormats()}
       />
-      <div style={{ marginTop: 14 }}>
-        <button className="btn-primary wide" onClick={getFormats} disabled={busy}>
-          Get formats
-        </button>
+      <div style={{ marginTop: 16, display: 'flex', justifyContent: 'center' }}>
+        <LiquidMetalButton label="Get formats" width={170} onClick={getFormats} disabled={busy} />
       </div>
       <Status {...(status || {})} />
 

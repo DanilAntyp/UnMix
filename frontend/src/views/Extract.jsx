@@ -63,21 +63,22 @@ export function ExtractView({ handoff }) {
 
   return (
     <div className="glass">
-      <PanelHead
-        tile="tile-sun" icon={<IconWave />}
-        title="Sound Extraction" sub="Isolate any part of a song — or split everything"
-      />
+      <div className="head-row">
+        <PanelHead
+          tile="tile-sun" icon={<IconWave />}
+          title="Sound Extraction" sub="Isolate any part of a song — or split everything"
+        />
+        <div className="seg" title="Standard: 4 stems, best quality. Extended: 6 stems, adds guitar & piano.">
+          <button className={model === 'htdemucs' ? 'on' : ''}
+            onClick={() => setModel('htdemucs')}>Standard</button>
+          <button className={model === 'htdemucs_6s' ? 'on' : ''}
+            onClick={() => setModel('htdemucs_6s')}>Extended</button>
+        </div>
+      </div>
       <DropZone onFile={pickLocal} icon={<IconWave width={30} height={30} color="#9a9aa8" />}
         hint="mp3, wav, flac, m4a …" accept="audio/*,.mp3,.wav,.flac,.m4a,.ogg,.aac" />
       {picked && <div className="picked">♪ {picked.title}</div>}
 
-      <div className="setting">
-        <label>Model:</label>
-        <select value={model} onChange={e => setModel(e.target.value)}>
-          <option value="htdemucs">Standard — 4 stems, best quality</option>
-          <option value="htdemucs_6s">Extended — 6 stems, adds guitar & piano</option>
-        </select>
-      </div>
       <div className="setting">
         <label>Sound to extract:</label>
         <select value={stem} onChange={e => setStem(e.target.value)}>
