@@ -92,25 +92,21 @@ export function Waveform({ src, selectable, onSelect, height = 96 }) {
       const n = peaks.length
       const bw = w / n
       const playedX = duration ? (pos / duration) * w : 0
-      const grad = ctx.createLinearGradient(0, 0, w, 0)
-      grad.addColorStop(0, '#8b5cf6')
-      grad.addColorStop(0.55, '#ff5c8a')
-      grad.addColorStop(1, '#ff9950')
       for (let i = 0; i < n; i++) {
         const [mn, mx] = peaks[i]
         const x = i * bw
         let y1 = mid + mn * mid * 0.94
         let y2 = mid + mx * mid * 0.94
         if (y2 - y1 < 1.6) { y1 = mid - 0.8; y2 = mid + 0.8 }
-        ctx.fillStyle = x <= playedX ? grad : 'rgba(255,255,255,0.30)'
+        ctx.fillStyle = x <= playedX ? '#f5f5f7' : 'rgba(255,255,255,0.25)'
         ctx.fillRect(x, Math.min(y1, y2), Math.max(1, bw * 0.72), Math.abs(y2 - y1))
       }
       if (sel && duration) {
         const x1 = (sel[0] / duration) * w
         const x2 = (sel[1] / duration) * w
-        ctx.fillStyle = 'rgba(139,92,246,0.20)'
+        ctx.fillStyle = 'rgba(10,132,255,0.22)'
         ctx.fillRect(x1, 0, x2 - x1, h)
-        ctx.fillStyle = 'rgba(167,139,250,0.9)'
+        ctx.fillStyle = 'rgba(10,132,255,0.9)'
         ctx.fillRect(x1, 0, 1.5, h)
         ctx.fillRect(x2 - 1.5, 0, 1.5, h)
       }

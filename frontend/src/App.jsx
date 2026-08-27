@@ -42,7 +42,6 @@ export default function App() {
         <div className="blob blob-2" />
         <div className="blob blob-3" />
       </div>
-
       <aside className="sidebar">
         <div className="logo">Un<em>Mix</em></div>
         {NAV.map(n => (
