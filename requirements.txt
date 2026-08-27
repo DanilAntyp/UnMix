@@ -1,0 +1,6 @@
+flask
+demucs
+soundfile
+yt-dlp
+faster-whisper
+pillow
