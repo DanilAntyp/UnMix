@@ -1,18 +1,31 @@
-import { useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { postForm } from '../api'
 import { DropZone, Status, MediaCard, PanelHead, IconScissors } from '../ui'
+import { Waveform, fmtTimePrecise } from '../Waveform'
 
 export function ConvertView() {
   const [file, setFile] = useState(null)
+  const [fileUrl, setFileUrl] = useState(null)
   const [fmt, setFmt] = useState('mp3-192')
   const [start, setStart] = useState('')
   const [end, setEnd] = useState('')
   const [status, setStatus] = useState(null)
   const [result, setResult] = useState(null)
   const [busy, setBusy] = useState(false)
+  const urlRef = useRef(null)
+
+  useEffect(() => () => { if (urlRef.current) URL.revokeObjectURL(urlRef.current) }, [])
 
   function pick(f) {
-    setFile(f); setResult(null); setStatus(null)
+    if (urlRef.current) URL.revokeObjectURL(urlRef.current)
+    urlRef.current = URL.createObjectURL(f)
+    setFile(f); setFileUrl(urlRef.current)
+    setResult(null); setStatus(null); setStart(''); setEnd('')
+  }
+
+  function onSelect(sel) {
+    if (sel) { setStart(fmtTimePrecise(sel[0])); setEnd(fmtTimePrecise(sel[1])) }
+    else { setStart(''); setEnd('') }
   }
 
   async function run() {
@@ -42,6 +55,11 @@ export function ConvertView() {
       <DropZone onFile={pick} icon={<IconScissors width={30} height={30} color="#9a9aa8" />}
         hint="any audio or video file" />
       {file && <div className="picked">♪ {file.name}</div>}
+      {fileUrl && (
+        <div style={{ marginTop: 14 }}>
+          <Waveform src={fileUrl} selectable onSelect={onSelect} />
+        </div>
+      )}
 
       <div className="setting">
         <label>Format:</label>

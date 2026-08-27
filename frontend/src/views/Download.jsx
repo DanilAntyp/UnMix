@@ -1,6 +1,8 @@
 import { useState } from 'react'
 import { postJSON, pollProgress, fmtMB } from '../api'
 import { Status, MediaCard, PanelHead, IconDownload } from '../ui'
+import { Waveform } from '../Waveform'
+import { ConvertControls } from '../ConvertControls'
 
 export function DownloadView({ onExtract, onKaraoke }) {
   const [url, setUrl] = useState('')
@@ -8,6 +10,7 @@ export function DownloadView({ onExtract, onKaraoke }) {
   const [status, setStatus] = useState(null) // {busy, text, pct, error}
   const [result, setResult] = useState(null) // {title, file, video}
   const [busy, setBusy] = useState(false)
+  const [sel, setSel] = useState(null)       // waveform trim selection
 
   async function getFormats() {
     if (!url.trim()) { setStatus({ text: 'Paste a YouTube link first.', error: true }); return }
@@ -93,21 +96,30 @@ export function DownloadView({ onExtract, onKaraoke }) {
         </div>
       )}
 
-      {result && (
+      {result && result.video && (
         <div className="results">
-          <MediaCard
-            title={result.title} url={result.file} video={result.video}
-            actions={!result.video && (
-              <>
+          <MediaCard title={result.title} url={result.file} video />
+        </div>
+      )}
+      {result && !result.video && (
+        <div className="results">
+          <div className="media-card glass-soft">
+            <div className="media-row">
+              <span className="media-name">{result.title}</span>
+              <span className="media-actions">
                 <button className="chip" onClick={() => onExtract(result.file, result.title)}>
                   Extract sound →
                 </button>
                 <button className="chip grad" onClick={() => onKaraoke(result.file)}>
                   Make karaoke →
                 </button>
-              </>
-            )}
-          />
+                <a className="chip" href={encodeURI(result.file)}
+                  download={decodeURIComponent(result.file.split('/').pop())}>Download</a>
+              </span>
+            </div>
+            <Waveform src={encodeURI(result.file)} selectable onSelect={setSel} />
+            <ConvertControls serverFile={result.file} sel={sel} />
+          </div>
         </div>
       )}
     </div>

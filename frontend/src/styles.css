@@ -249,6 +249,43 @@ button, input, select { font-family: inherit; }
 audio { width: 100%; height: 40px; }
 video { width: 100%; border-radius: 12px; background: #000; }
 
+/* ---------- waveform player ---------- */
+.wave { display: flex; align-items: center; gap: 14px; }
+.wave-btn {
+  width: 42px; height: 42px; border-radius: 50%; flex-shrink: 0;
+  border: none; cursor: pointer; color: #fff;
+  display: flex; align-items: center; justify-content: center;
+  background: linear-gradient(135deg, var(--accent-a), var(--accent-b));
+  box-shadow: 0 3px 16px rgba(139, 92, 246, 0.35);
+  transition: filter .15s;
+}
+.wave-btn:hover { filter: brightness(1.15); }
+.wave-btn:disabled { background: rgba(255, 255, 255, 0.08); color: #6d6d7a; box-shadow: none; }
+.wave-body { flex: 1; min-width: 0; }
+.wave-body canvas { cursor: crosshair; touch-action: none; }
+.wave-loading {
+  height: 96px; display: flex; align-items: center; justify-content: center;
+  color: #62626e; font-size: 0.85rem;
+}
+.wave-hint { margin-top: 6px; font-size: 0.76rem; color: #62626e; }
+.wave-time {
+  flex-shrink: 0; font-size: 0.82rem; color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+
+/* ---------- inline convert & trim ---------- */
+.convert-inline { margin-top: 14px; border-top: 1px solid rgba(255, 255, 255, 0.06); padding-top: 14px; }
+.convert-row { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+.convert-row select, .convert-row input {
+  padding: 9px 12px; border-radius: 11px; font-size: 0.88rem;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  background: rgba(0, 0, 0, 0.35); color: var(--text); outline: none;
+}
+.convert-row select { cursor: pointer; }
+.convert-row select option { background: #16161d; }
+.convert-row input { width: 92px; }
+.convert-row input:focus, .convert-row select:focus { border-color: rgba(139, 92, 246, 0.6); }
+
 @media (max-width: 760px) {
   .sidebar { display: none; }
   .main { padding: 28px 18px 60px; }

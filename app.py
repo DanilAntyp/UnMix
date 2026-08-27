@@ -748,30 +748,50 @@ CONV_FORMATS = {
 }
 
 
+SERVED_DIRS = {"/downloads/": DL_DIR, "/separated/": OUT_DIR, "/converted/": CONV_DIR}
+
+
+def resolve_served(url_path: str):
+    """Map a /downloads|separated|converted/ URL back to a safe local path."""
+    for prefix, base in SERVED_DIRS.items():
+        if url_path.startswith(prefix):
+            p = (base / Path(url_path).name).resolve()
+            if p.parent == base.resolve() and p.is_file():
+                return p
+    return None
+
+
 @app.post("/convert")
 def convert():
     f = request.files.get("audio")
-    if f is None or f.filename == "":
-        return jsonify(error="no file uploaded"), 400
-    fmt = request.form.get("format", "mp3-192")
+    if f is not None and f.filename:
+        form = request.form
+        stem = Path(f.filename).stem or "audio"
+        suffix = Path(f.filename).suffix or ".mp3"
+        with tempfile.NamedTemporaryFile(suffix=suffix, delete=False) as tmp:
+            f.save(tmp.name)
+            src, cleanup = Path(tmp.name), True
+    else:
+        form = request.get_json(silent=True) or {}
+        src = resolve_served(form.get("server_file", ""))
+        if src is None:
+            return jsonify(error="no file uploaded"), 400
+        stem, cleanup = src.stem, False
+
+    fmt = form.get("format", "mp3-192")
     if fmt not in CONV_FORMATS:
         return jsonify(error=f"unknown format: {fmt}"), 400
-    start = (request.form.get("start") or "").strip()
-    end = (request.form.get("end") or "").strip()
+    start = (form.get("start") or "").strip()
+    end = (form.get("end") or "").strip()
     for t in (start, end):
         if t and not TIME_RE.match(t):
             return jsonify(error=f"bad time '{t}' - use mm:ss"), 400
 
     ext, codec_args = CONV_FORMATS[fmt]
-    stem = Path(f.filename).stem or "audio"
-    suffix = Path(f.filename).suffix or ".mp3"
-    with tempfile.NamedTemporaryFile(suffix=suffix, delete=False) as tmp:
-        f.save(tmp.name)
-        tmp_path = Path(tmp.name)
     try:
         out_name = f"{stem}{'_cut' if (start or end) else ''}.{ext}"
         out_path = CONV_DIR / out_name
-        cmd = ["ffmpeg", "-y", "-i", str(tmp_path), "-vn"]
+        cmd = ["ffmpeg", "-y", "-i", str(src), "-vn"]
         if start:
             cmd += ["-ss", start]
         if end:
@@ -782,7 +802,8 @@ def convert():
             return jsonify(error="ffmpeg failed: " + r.stderr[-300:]), 500
         return jsonify(file=f"/converted/{out_name}", name=out_name)
     finally:
-        tmp_path.unlink(missing_ok=True)
+        if cleanup:
+            src.unlink(missing_ok=True)
 
 
 @app.get("/converted/<path:name>")
