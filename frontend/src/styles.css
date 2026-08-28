@@ -346,6 +346,24 @@ video { width: 100%; border-radius: 10px; background: #000; }
   box-shadow: 0 2px 5px rgba(0, 0, 0, 0.35), inset 0 1px 0 rgba(255, 255, 255, 0.7);
 }
 .metal-scope .wave-btn:hover { background: linear-gradient(180deg, #ffffff, #bdbdbd); }
+.metal-scope .seg {
+  border-radius: 100px; padding: 3px;
+  background: linear-gradient(180deg, #0c0c0c, #161616);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  box-shadow: inset 0 2px 5px rgba(0, 0, 0, 0.4);
+}
+.metal-scope .seg button { border-radius: 100px; }
+.metal-scope .seg button.on {
+  background: linear-gradient(180deg, #f2f2f2, #b6b6b6); color: #111;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.5), inset 0 1px 0 rgba(255, 255, 255, 0.7);
+}
+.metal-scope .setting select {
+  border-radius: 100px; padding: 11px 18px;
+  background: linear-gradient(180deg, #0c0c0c, #151515);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+}
+.metal-scope .setting select:focus { border-color: rgba(255, 255, 255, 0.24); }
+.metal-scope .drop { border-radius: 20px; }
 
 @media (max-width: 760px) {
   .sidebar { display: none; }

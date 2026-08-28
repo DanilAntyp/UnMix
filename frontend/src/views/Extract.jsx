@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import { postForm, postJSON, pollProgress, STEM_NAMES, MODEL_STEMS } from '../api'
 import { DropZone, Status, MediaCard, PanelHead, IconWave } from '../ui'
+import { LiquidMetalButton } from '../LiquidMetalButton'
 
 export function ExtractView({ handoff }) {
   const [model, setModel] = useState('htdemucs')
@@ -62,7 +63,7 @@ export function ExtractView({ handoff }) {
   }
 
   return (
-    <div className="glass">
+    <div className="glass metal-scope">
       <div className="head-row">
         <PanelHead
           tile="tile-sun" icon={<IconWave />}
@@ -92,15 +93,15 @@ export function ExtractView({ handoff }) {
       </div>
 
       {picked && (
-        <div style={{ marginTop: 16 }}>
-          <button className="btn-primary wide" onClick={run} disabled={busy}>Extract</button>
+        <div style={{ marginTop: 18, display: 'flex', justifyContent: 'center' }}>
+          <LiquidMetalButton label="Extract" width={150} onClick={run} disabled={busy} />
         </div>
       )}
       <Status {...(status || {})} />
 
       {results.length > 0 && (
         <div className="results">
-          {results.map(r => <MediaCard key={r.url} title={r.title} url={r.url} />)}
+          {results.map(r => <MediaCard key={r.url} title={r.title} url={r.url} accent="#e8e8e8" />)}
         </div>
       )}
     </div>
