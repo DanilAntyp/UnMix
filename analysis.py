@@ -175,6 +175,35 @@ def harmony_plan(cam_a: str, cam_b: str, max_shift: int = 2):
     return 0, True
 
 
+def style_signals(path: Path) -> dict:
+    """Cheap per-track character signals for auto style selection:
+    onset_density (hits/sec), low_ratio (kick/808 weight), mid_ratio
+    (vocal/lead presence proxy)."""
+    return _cached("signals", path, lambda: _style_signals_impl(path))
+
+
+def _style_signals_impl(path: Path) -> dict:
+    y = _load_mono(path, max_seconds=120)
+    S = _stft_mag(y)
+    env = _onset_env(S)
+    fps = SR / HOP
+    thr = env.mean() + 1.2 * env.std()
+    min_dist = int(0.1 * fps)
+    peaks, last = 0, -min_dist
+    for i in range(1, len(env) - 1):
+        if env[i] >= thr and env[i] >= env[i - 1] and env[i] >= env[i + 1] and i - last >= min_dist:
+            peaks += 1
+            last = i
+    seconds = max(1e-6, len(env) / fps)
+    freqs = np.fft.rfftfreq(N_FFT, 1 / SR)
+    total = float(S.sum()) + 1e-9
+    return {
+        "onset_density": round(peaks / seconds, 2),
+        "low_ratio": round(float(S[:, freqs < 150].sum()) / total, 3),
+        "mid_ratio": round(float(S[:, (freqs >= 2000) & (freqs < 6000)].sum()) / total, 3),
+    }
+
+
 def madmom_grid(path: Path) -> dict:
     """Neural beat/downbeat tracking (madmom RNN + DBN decoder). Returns real,
     per-beat times instead of a rigid phase+period grid — this is what makes

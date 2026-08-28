@@ -107,6 +107,60 @@ def _slice(src: Path, start: float, dur: float, out: Path):
 # where the rhythm-section swap sits inside the transition window, per style
 SWAP_FRAC = {"automix": 0.5, "neural": 0.5, "bassswap": 0.5, "acapella": 0.4}
 
+FEEDBACK_FILE = APP_DIR / "feedback.jsonl"
+
+
+def _feedback_bias() -> dict:
+    """Aggregate 👍/👎 verdicts per style from past listening sessions."""
+    bias = {}
+    try:
+        import json as _json
+        for line in FEEDBACK_FILE.read_text().splitlines():
+            try:
+                d = _json.loads(line)
+                bias[d["style"]] = bias.get(d["style"], 0) + int(d["verdict"])
+            except Exception:
+                continue
+    except OSError:
+        pass
+    return bias
+
+
+def _auto_style(ctx, job, analysis, a_path, b_path) -> str:
+    """Pick a transition style from the pair's character: tempo feasibility,
+    key compatibility, aggressiveness — nudged by accumulated 👍/👎 feedback."""
+    sa = analysis.style_signals(a_path)
+    sb = analysis.style_signals(b_path)
+
+    def hard(s):
+        # calibrated on rap vs pop/funk/rock: hard tracks sit at >=2.8 hits/sec
+        return s["onset_density"] >= 2.8
+
+    ratio_ok = 0.9 <= ctx["ratio"] <= 1.12
+    if not ratio_ok:
+        cand, why = (("tapestop", "tempos too far apart + hard-hitting tracks")
+                     if hard(sa) or hard(sb)
+                     else ("echo", "tempos too far apart — clean hand-off"))
+    elif hard(sa) and hard(sb):
+        cand, why = "looproll", "both tracks are hard-hitting — stutter into the drop"
+    elif (ctx["shift"] == 0 and not ctx["clash"] and abs(ctx["ratio"] - 1) <= 0.02
+          and sa["mid_ratio"] >= 0.16 and sb["mid_ratio"] >= 0.16):
+        cand, why = "acapella", "keys match and vocals are prominent — acapella bridge"
+    elif ctx["clash"]:
+        cand, why = "automix", "keys clash — rhythm-only blend"
+    else:
+        cand, why = "automix", "compatible pair — smooth blend"
+
+    bias = _feedback_bias()
+    if bias.get(cand, 0) <= -2:  # you kept disliking this one — try the next best
+        for alt in ("automix", "tapestop", "echo", "crossfade"):
+            if alt != cand and bias.get(alt, 0) > -2:
+                why += f" (switched from {cand}: your 👎 history)"
+                cand = alt
+                break
+    job["auto_reason"] = why
+    return cand
+
 
 def _load_grid(analysis, path: Path, job=None, label="") -> dict:
     """Real downbeats from madmom when possible, comb-grid fallback otherwise."""
@@ -456,31 +510,31 @@ def _prep(job, a_path, b_path, beats, need_stretch):
     ctx["ratio"] = ratio
     job["stretch"] = round(ratio, 4)
 
-    def make_b(stretched, override_orig=None):
+    def make_b(stretched, override_orig=None, fast=False):
         import shutil as _sh
         out = work / ("b_matched.wav" if stretched else "b_plain.wav")
         stretching = stretched and abs(ratio - 1) > 0.005
         shift = ctx.get("shift", 0) if stretched else 0  # only blends overlap harmonically
-        rb = _sh.which("rubberband")
-        if rb and (stretching or shift):
-            # rubberband: better transient preservation than atempo, and clean
-            # pitch shifting for key matching
+        # rubberband earns its runtime only for audible stretches or pitch
+        # shifts; tiny tempo nudges sound identical through atempo
+        need_rb = (stretching and abs(ratio - 1) > 0.04) or shift
+        rb = None if fast else _sh.which("rubberband")
+        if rb and need_rb:
+            # rubberband (R2 engine — good transients, reasonable speed);
+            # also does clean pitch shifting for key matching
             raw = work / "b_raw.wav"
             _run(["ffmpeg", "-y", "-i", str(b_path), "-ac", "2", "-ar", "44100", str(raw)])
-            cmd = [rb, "--fine", "-t", f"{1 / ratio:.6f}" if stretching else "1.0"]
+            cmd = [rb, "-t", f"{1 / ratio:.6f}" if stretching else "1.0"]
             if shift:
                 cmd += ["-p", str(shift)]
             rbo = work / "b_rb.wav"
             r = subprocess.run(cmd + [str(raw), str(rbo)], capture_output=True, text=True)
-            if r.returncode != 0:  # older rubberband without --fine
-                r = subprocess.run([c for c in cmd if c != "--fine"] + [str(raw), str(rbo)],
-                                   capture_output=True, text=True)
             if r.returncode == 0:
                 _run(["ffmpeg", "-y", "-i", str(rbo), "-af", f"volume={gain_b:.3f}", str(out)])
                 job["stretch_tool"] = "rubberband"
             else:
                 rb = None
-        if not (rb and (stretching or shift)):
+        if not (rb and need_rb):
             af = (f"atempo={ratio:.4f}," if stretching else "")
             if shift:
                 f = 2 ** (shift / 12)
@@ -502,7 +556,11 @@ def _prep(job, a_path, b_path, beats, need_stretch):
             return {"file": out, "b_start": snap(t_local), "manual": True}
 
         try:
-            secs = analysis.detect_sections(out)
+            # sections of the ORIGINAL B (cached across jobs), scaled in time
+            secs0 = analysis.detect_sections(b_path)
+            k = ratio if stretching else 1.0
+            secs = [{"start": round(s["start"] / k, 2), "end": round(s["end"] / k, 2),
+                     "energy": s["energy"]} for s in secs0]
         except Exception:
             secs = []
         drop = _find_drop(secs)
@@ -636,10 +694,14 @@ def process_job(job_id, a_path, b_path, opts):
             return _preview_job(job, a_path, b_path, opts)
 
         style = opts.get("style", "automix")
-        if style not in STYLES:
+        if style != "auto" and style not in STYLES:
             raise ValueError(f"unknown style: {style}")
         beats = int(opts.get("beats") or 32)
-        ctx = _prep(job, a_path, b_path, beats, need_stretch=style not in HARD_STYLES)
+        ctx = _prep(job, a_path, b_path, beats,
+                    need_stretch=(style == "auto" or style not in HARD_STYLES))
+        if style == "auto":
+            style = _auto_style(ctx, job, analysis, a_path, b_path)
+            job["style_chosen"] = style
         T, bar, bpm, work = ctx["T"], ctx["bar"], ctx["bpm"], ctx["work"]
 
         if style == "automix" and not (0.9 <= ctx["ratio"] <= 1.12):
@@ -737,8 +799,8 @@ def _preview_job(job, a_path, b_path, opts):
     ctx = _prep(job, a_path, b_path, beats, need_stretch=True)
     T, bar, bpm, work = ctx["T"], ctx["bar"], ctx["bpm"], ctx["work"]
 
-    b_soft_var = ctx["make_b"](stretched=True, override_orig=opts.get("b_start"))
-    b_hard_var = (ctx["make_b"](stretched=False, override_orig=opts.get("b_start"))
+    b_soft_var = ctx["make_b"](stretched=True, override_orig=opts.get("b_start"), fast=True)
+    b_hard_var = (ctx["make_b"](stretched=False, override_orig=opts.get("b_start"), fast=True)
                   if any(s in HARD_STYLES for s in styles) else b_soft_var)
     b_soft = {"file": b_soft_var["file"], "b_start": _entry_for(b_soft_var, "automix", T)[0]}
     b_hard = {"file": b_hard_var["file"], "b_start": _entry_for(b_hard_var, "cut", T)[0]}
@@ -781,6 +843,176 @@ def _preview_job(job, a_path, b_path, opts):
             previews.append({"style": style, "error": str(e)})
     job["previews"] = previews
     job["stage"] = "Done! Transition hits at 0:12 in every clip."
+
+
+@bp.post("/dj/feedback")
+def dj_feedback():
+    """👍/👎 on a preview/result; stored with pair context to tune defaults."""
+    import json as _json
+    import time as _time
+    data = request.get_json(silent=True) or {}
+    style = data.get("style")
+    verdict = data.get("verdict")
+    if style not in STYLES or verdict not in (1, -1):
+        return jsonify(error="bad feedback"), 400
+    entry = {"ts": int(_time.time()), "style": style, "verdict": verdict,
+             "a": Path(data.get("a_file", "")).name, "b": Path(data.get("b_file", "")).name,
+             "beats": data.get("beats")}
+    try:
+        import analysis
+        for k, f in (("a_facts", data.get("a_file")), ("b_facts", data.get("b_file"))):
+            p = _resolve(f or "")
+            if p is not None:
+                entry[k] = analysis.analyze(p)
+    except Exception:
+        pass
+    with open(FEEDBACK_FILE, "a") as fh:
+        fh.write(_json.dumps(entry) + "\n")
+    return jsonify(ok=True, bias=_feedback_bias())
+
+
+def _set_job(job, paths, beats):
+    """Playlist AutoMix: order tracks by BPM/key compatibility, then chain them
+    with stem-blend joins into one continuous set."""
+    import analysis
+    try:
+        n = len(paths)
+        facts, grids = [], []
+        for i, p in enumerate(paths):
+            job["stage"] = f"Analyzing tracks... ({i + 1}/{n})"
+            grids.append(_load_grid(analysis, p))
+            facts.append(analysis.analyze(p))
+
+        # ordering: greedy chain minimizing tempo distance + key penalty
+        import math
+        bpms = [g["bpm"] or 120 for g in grids]
+        start = min(range(n), key=lambda i: abs(bpms[i] - float(np.median(bpms))))
+        order, used = [start], {start}
+        while len(order) < n:
+            cur = order[-1]
+
+            def cost(j):
+                r = _fold_ratio(bpms[cur] / bpms[j])
+                shift, clash = analysis.harmony_plan(facts[cur].get("camelot"),
+                                                     facts[j].get("camelot"))
+                return abs(math.log(r)) * 3 + (1.0 if clash else 0.25 * abs(shift))
+            nxt = min((j for j in range(n) if j not in used), key=cost)
+            order.append(nxt)
+            used.add(nxt)
+        job["order"] = [Path(paths[i]).stem for i in order]
+
+        work = Path(tempfile.mkdtemp(prefix="djset_"))
+        X = 0.05
+        r0, _ = analysis.rms_profile(paths[order[0]])
+        med0 = _active_median(r0)
+
+        # build tempo-chained, gain-matched versions of every track
+        matched, mgrids = [], []
+        target_bpm = bpms[order[0]]
+        for k, i in enumerate(order):
+            job["stage"] = f"Tempo-chaining... ({k + 1}/{n})"
+            ratio = 1.0 if k == 0 else _fold_ratio(target_bpm / bpms[i])
+            ri, _ = analysis.rms_profile(paths[i])
+            gain = float(np.clip(med0 / max(_active_median(ri), 1e-6), 0.5, 2.0))
+            out = work / f"m{k}.wav"
+            af = (f"atempo={ratio:.4f}," if abs(ratio - 1) > 0.005 else "") + f"volume={gain:.3f}"
+            _run(["ffmpeg", "-y", "-i", str(paths[i]), "-af", af, "-ac", "2", "-ar", "44100", str(out)])
+            matched.append(out)
+            mgrids.append(_grid_scaled(grids[i], ratio if abs(ratio - 1) > 0.005 else 1.0))
+            target_bpm = bpms[i] * ratio
+
+        pieces = []           # wav pieces to be joined with tiny crossfades
+        tracklist = [{"title": Path(paths[order[0]]).stem, "at": 0.0}]
+        pos = 0.0
+        prev_start = 0.0
+        for k in range(1, n):
+            A, B = matched[k - 1], matched[k]
+            ga, gb = mgrids[k - 1], mgrids[k]
+            bpm = ga["bpm"] or 120
+            T = max(2.0, beats * 60.0 / bpm)
+            job["stage"] = f"Join {k}/{n - 1}: picking points..."
+            r_a, win_a = analysis.rms_profile(A)
+            ctx = {"grid_a": ga, "bar": ga["bar_len"], "r_a": r_a, "win_a": win_a,
+                   "med_a": _active_median(r_a)}
+            a_cands = _exit_candidates(ctx, A, "automix", T)
+            secs_b = analysis.detect_sections(B)
+            bvar = {"snap": lambda t, g=gb: _snap_grid(t, g), "sections": secs_b,
+                    "drop": _find_drop(secs_b), "loud": gb["bar"]}
+            b_cands = _entry_candidates(bvar, "automix", T)
+            _, cut, b_start, _, _, _, _ = _choose_pair(a_cands, b_cands)
+            clash = analysis.harmony_plan(facts[order[k - 1]].get("camelot"),
+                                                  facts[order[k]].get("camelot"))[1]
+
+            job["stage"] = f"Join {k}/{n - 1}: stems (Demucs)..."
+            sa = _separate_window(A, cut, T, work, f"a{k}")
+            sb = _separate_window(B, b_start, T, work, f"b{k}")
+            delta = analysis.align_beats(A, cut, B, b_start, min(T, 4 * ga["bar_len"]), bpm)[0]
+
+            job["stage"] = f"Join {k}/{n - 1}: rendering..."
+            env_a, env_b = _stem_envelopes("automix", T, ga["bar_len"], clash)
+            v = _vocal_safe_start(sb["vocals"], T / 2 + ga["bar_len"], T)
+            if v is not None:
+                env_b["vocals"] = f"volume=0:enable='lt(t,{v:.3f})',afade=t=in:st={v:.3f}:d=0.5"
+            join = work / f"join{k}.wav"
+            order_s = ["vocals", "drums", "bass", "other"]
+            cmd = ["ffmpeg", "-y"]
+            for s in order_s:
+                cmd += ["-i", str(sa[s])]
+            for s in order_s:
+                cmd += ["-i", str(sb[s])]
+            fa = [f"[{i2}:a]{env_a[s]}[sa{i2}]" for i2, s in enumerate(order_s)]
+            fb = [f"[{i2 + 4}:a]{env_b[s]},adelay={max(0, int(delta * 1000))}|{max(0, int(delta * 1000))}[sb{i2}]"
+                  for i2, s in enumerate(order_s)]
+            fc = ";".join(fa + fb) + (
+                ";[sa0][sa1][sa2][sa3]amix=inputs=4:normalize=0[at]"
+                ";[sb0][sb1][sb2][sb3]amix=inputs=4:normalize=0[bt]"
+                ";[at][bt]amix=inputs=2:duration=longest:normalize=0,alimiter=limit=0.97[out]")
+            _run(cmd + ["-filter_complex", fc, "-map", "[out]", str(join)])
+
+            head = work / f"head{k}.wav"
+            _extract(matched[k - 1], prev_start, cut - prev_start, head)
+            pieces += [head, join]
+            pos += (cut - prev_start) + T / 2
+            tracklist.append({"title": Path(paths[order[k]]).stem, "at": round(pos, 1)})
+            pos += T / 2 - X * 2
+            prev_start = b_start + T - X
+
+        tail = work / "tail.wav"
+        _extract(matched[-1], prev_start, _duration(matched[-1]) - prev_start, tail)
+        pieces.append(tail)
+
+        job["stage"] = "Stitching the set..."
+        acc = pieces[0]
+        for i, p in enumerate(pieces[1:]):
+            nxt = work / f"acc{i}.wav"
+            _run(["ffmpeg", "-y", "-i", str(acc), "-i", str(p),
+                  "-filter_complex", f"[0:a][1:a]acrossfade=d={X}[out]",
+                  "-map", "[out]", str(nxt)])
+            acc = nxt
+        out_name = f"set_{uuid.uuid4().hex[:6]}.mp3"
+        out_path = DJ_DIR / out_name
+        _run(["ffmpeg", "-y", "-i", str(acc), "-c:a", "libmp3lame", "-b:a", "320k", str(out_path)])
+
+        job["tracklist"] = tracklist
+        job["file"] = f"/djmixes/{out_name}"
+        job["stage"] = "Done!"
+    except Exception as e:
+        job["error"] = str(e)
+    finally:
+        job["done"] = True
+
+
+@bp.post("/dj/set/start")
+def dj_set_start():
+    data = request.get_json(silent=True) or {}
+    paths = [_resolve(f) for f in (data.get("files") or [])]
+    if any(p is None for p in paths) or len(paths) < 2:
+        return jsonify(error="pick at least two tracks"), 400
+    beats = int(data.get("beats") or 32)
+    job_id = uuid.uuid4().hex[:12]
+    jobs[job_id] = {"stage": "Starting...", "done": False, "error": None, "file": None}
+    threading.Thread(target=_set_job, args=(jobs[job_id], paths, beats), daemon=True).start()
+    return jsonify(job=job_id)
 
 
 @bp.post("/dj/inspect")

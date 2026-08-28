@@ -6,6 +6,7 @@ import { Waveform, fmtTime } from '../Waveform'
 import { TransitionLane } from '../TransitionLane'
 
 const STYLES = [
+  { id: 'auto', name: '✨ Auto — pick for me', desc: 'the engine chooses a style from tempo, keys and how hard the tracks hit (learns from your 👍/👎)' },
   { id: 'automix', name: 'AutoMix', desc: 'smooth Apple Music-style blend — best for pop, house, anything melodic' },
   { id: 'acapella', name: 'Acapella bridge', desc: "A's vocal goes naked, then B's beat drops underneath it — check the keys match" },
   { id: 'tapestop', name: 'Tape stop', desc: 'A powers down like a turntable, B slams in — for hard rap / trap' },
@@ -122,7 +123,9 @@ export function DJView() {
         return
       }
       setStatus({
-        text: `Done! Transition at ${fmtTime(j.transition_at)}` +
+        text: `Done!` +
+          (j.style_chosen ? ` Auto chose ${j.style_chosen} (${j.auto_reason}).` : '') +
+          ` Transition at ${fmtTime(j.transition_at)}` +
           (j.b_skip > 0.5 ? ` · B enters from ${fmtTime(j.b_skip)}` : '') +
           (j.entry_plan && j.entry_plan !== 'manual' ? ` (${j.entry_plan})` : '') +
           (j.key_action ? ` · ${j.key_action}` : '') +
@@ -138,6 +141,14 @@ export function DJView() {
   }
 
   const styleInfo = STYLES.find(s => s.id === style)
+  const [voted, setVoted] = useState({})
+
+  function vote(st, verdict) {
+    setVoted(v => ({ ...v, [st]: verdict }))
+    postJSON('/dj/feedback', {
+      style: st, verdict, a_file: decodeURI(a || ''), b_file: decodeURI(b || ''), beats,
+    }).catch(() => {})
+  }
 
   return (
     <div className="glass metal-scope dj-console">
@@ -208,7 +219,13 @@ export function DJView() {
             <div key={p.style} className="media-card glass-soft">
               <div className="media-row">
                 <span className="media-name">{STYLES.find(s => s.id === p.style)?.name || p.style}</span>
-                <button className="chip" onClick={() => setStyle(p.style)}>Use this style</button>
+                <span className="media-actions">
+                  <button className={'chip tiny' + (voted[p.style] === 1 ? ' active' : '')}
+                    onClick={() => vote(p.style, 1)}>👍</button>
+                  <button className={'chip tiny' + (voted[p.style] === -1 ? ' active' : '')}
+                    onClick={() => vote(p.style, -1)}>👎</button>
+                  <button className="chip" onClick={() => setStyle(p.style)}>Use this style</button>
+                </span>
               </div>
               <Waveform src={encodeURI(p.file)} height={48} accent="#e8e8e8" />
             </div>
