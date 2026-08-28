@@ -442,6 +442,26 @@ video { width: 100%; border-radius: 10px; background: #000; }
   margin-top: 10px; font-size: 0.85rem; color: #d1d1d6;
   display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
 }
+.view-wide { max-width: 1240px; }
+
+/* flat full-width DJ layout */
+.dj-flat { padding-top: 4px; }
+.dj-decks { display: grid; grid-template-columns: 1fr 1fr; gap: 40px; }
+@media (max-width: 800px) { .dj-decks { grid-template-columns: 1fr; gap: 20px; } }
+.deck-label { font-weight: 600; font-size: 0.95rem; margin-bottom: 10px; }
+.deck-label span { color: var(--muted); font-weight: 400; font-size: 0.8rem; margin-left: 8px; }
+.deck-row { display: flex; gap: 10px; align-items: center; }
+.deck-facts { margin-top: 10px; display: flex; }
+.dj-editor {
+  margin-top: 30px; padding-top: 24px;
+  border-top: 1px solid var(--hairline-soft);
+}
+.dj-controls {
+  margin-top: 28px; padding-top: 24px;
+  border-top: 1px solid var(--hairline-soft);
+  display: flex; align-items: center; justify-content: center; gap: 14px; flex-wrap: wrap;
+}
+
 .editor { margin-top: 16px; padding: 16px; }
 .lane { margin-bottom: 14px; }
 .lane-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 6px; }

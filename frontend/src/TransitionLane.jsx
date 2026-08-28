@@ -130,10 +130,10 @@ export function TransitionLane({ src, info, marker, onMarker, label, note }) {
           <span className="lane-time">{fmtTime(marker)}</span>
         </span>
       </div>
-      {!peaks && <div className="wave-loading" style={{ height: 64 }}>building waveform…</div>}
+      {!peaks && <div className="wave-loading" style={{ height: 92 }}>building waveform…</div>}
       <canvas
         ref={canvasRef}
-        style={{ width: '100%', height: 64, cursor: 'ew-resize', touchAction: 'none',
+        style={{ width: '100%', height: 92, cursor: 'ew-resize', touchAction: 'none',
                  display: peaks ? 'block' : 'none' }}
         onPointerDown={e => {
           e.currentTarget.setPointerCapture(e.pointerId)

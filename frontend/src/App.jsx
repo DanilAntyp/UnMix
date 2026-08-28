@@ -67,7 +67,7 @@ export default function App() {
       </aside>
 
       <main className="main">
-        <div className="view">
+        <div className={'view' + (view === 'dj' ? ' view-wide' : '')}>
           <div className="hero">
             <h1>{title}</h1>
             <p>{sub}</p>

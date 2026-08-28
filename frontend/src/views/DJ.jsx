@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { postForm, postJSON } from '../api'
-import { DropZone, Status, MediaCard, PanelHead, TrackFacts, IconNote } from '../ui'
+import { Status, MediaCard, TrackFacts } from '../ui'
 import { LiquidMetalButton } from '../LiquidMetalButton'
 import { Waveform, fmtTime } from '../Waveform'
 import { TransitionLane } from '../TransitionLane'
@@ -20,7 +20,8 @@ const STYLES = [
   { id: 'cut', name: 'Cut', desc: 'clean switch on the beat' },
 ]
 
-function DeckSlot({ label, hint, value, onChange, files, refresh }) {
+function Deck({ label, hint, value, onChange, files, refresh }) {
+  const inputRef = useRef(null)
   const [uploading, setUploading] = useState(false)
   async function upload(f) {
     setUploading(true)
@@ -33,20 +34,21 @@ function DeckSlot({ label, hint, value, onChange, files, refresh }) {
     } catch {} finally { setUploading(false) }
   }
   return (
-    <div className="slot">
-      <div className="slot-label">{label} <span>{hint}</span></div>
-      <select className="slot-select" value={value || ''} onChange={e => onChange(e.target.value || null)}>
-        <option value="">choose a downloaded track…</option>
-        {files.map(f => <option key={f.file} value={f.file}>{f.name}</option>)}
-      </select>
-      <DropZone onFile={upload} icon={<IconNote width={22} height={22} color="#9a9aa8" />}
-        hint={uploading ? 'uploading…' : 'or drop a new file'} accept="audio/*,.mp3,.wav,.flac,.m4a,.ogg,.aac" />
-      {value && (
-        <div className="slot-picked">
-          ♪ {decodeURIComponent(value.split('/').pop())}
-          <TrackFacts url={value} />
-        </div>
-      )}
+    <div className="deck">
+      <div className="deck-label">{label} <span>{hint}</span></div>
+      <div className="deck-row">
+        <select className="slot-select" style={{ marginBottom: 0 }}
+          value={value || ''} onChange={e => onChange(e.target.value || null)}>
+          <option value="">choose a track…</option>
+          {files.map(f => <option key={f.file} value={f.file}>{f.name}</option>)}
+        </select>
+        <button className="chip" onClick={() => inputRef.current.click()}>
+          {uploading ? 'uploading…' : 'Upload'}
+        </button>
+        <input ref={inputRef} type="file" hidden accept="audio/*,.mp3,.wav,.flac,.m4a,.ogg,.aac"
+          onChange={e => { if (e.target.files[0]) upload(e.target.files[0]); e.target.value = '' }} />
+      </div>
+      {value && <div className="deck-facts"><TrackFacts url={value} /></div>}
     </div>
   )
 }
@@ -121,7 +123,7 @@ export function DJView() {
       }
       setStatus({
         text: `Done! Transition at ${fmtTime(j.transition_at)}` +
-          (j.b_skip > 0.5 ? ` · B enters from ${fmtTime(j.b_skip)} (intro skipped)` : '') +
+          (j.b_skip > 0.5 ? ` · B enters from ${fmtTime(j.b_skip)}` : '') +
           (Math.abs(j.stretch - 1) > 0.005 ? ` · B stretched ×${j.stretch}` : '') +
           (j.fallback ? ` · fell back to ${j.fallback}` : ''),
       })
@@ -136,20 +138,16 @@ export function DJView() {
   const styleInfo = STYLES.find(s => s.id === style)
 
   return (
-    <div className="glass metal-scope">
-      <PanelHead
-        tile="tile-rose" icon={<IconNote />}
-        title="DJ Transition" sub="Join two tracks with a real DJ-style transition, beat-matched"
-      />
-      <div className="slots">
-        <DeckSlot label="Deck A" hint="plays first" value={a} onChange={setA}
+    <div className="dj-flat metal-scope">
+      <div className="dj-decks">
+        <Deck label="Deck A" hint="plays first" value={a} onChange={setA}
           files={files} refresh={refresh} />
-        <DeckSlot label="Deck B" hint="comes in after" value={b} onChange={setB}
+        <Deck label="Deck B" hint="comes in after" value={b} onChange={setB}
           files={files} refresh={refresh} />
       </div>
 
       {inspect && (
-        <div className="editor glass-soft">
+        <div className="dj-editor">
           <TransitionLane
             src={a} info={inspect.a} marker={cutSec} onMarker={setCutSec}
             label="Deck A — exit point"
@@ -170,33 +168,32 @@ export function DJView() {
               reset to auto
             </button>
           )}
-          <div className="wave-hint" style={{ marginTop: 6 }}>
-            brighter waveform = higher-energy section · vertical lines = detected section boundaries ·
-            markers snap to bars
+          <div className="wave-hint">
+            brighter waveform = higher-energy section · lines = section boundaries · markers snap to bars
           </div>
         </div>
       )}
 
-      <div className="setting">
-        <label>Transition:</label>
-        <select value={style} onChange={e => setStyle(e.target.value)}>
+      <div className="dj-controls">
+        <select value={style} onChange={e => setStyle(e.target.value)} className="slot-select"
+          style={{ maxWidth: 260, marginBottom: 0 }}>
           {STYLES.map(s => <option key={s.id} value={s.id}>{s.name}</option>)}
         </select>
-        <label>Length:</label>
-        <select value={beats} onChange={e => setBeats(parseInt(e.target.value))} style={{ maxWidth: 130 }}>
+        <select value={beats} onChange={e => setBeats(parseInt(e.target.value))} className="slot-select"
+          style={{ maxWidth: 120, marginBottom: 0 }}>
           {[4, 8, 16, 32, 64].map(n => <option key={n} value={n}>{n} beats</option>)}
         </select>
+        {a && b && (
+          <>
+            <LiquidMetalButton label="Mix the tracks" width={170} onClick={() => start(false)} disabled={busy} />
+            <button className="chip" disabled={busy} onClick={() => start(true)}>
+              Preview all styles
+            </button>
+          </>
+        )}
       </div>
-      {styleInfo && <div className="wave-hint" style={{ marginTop: 8 }}>{styleInfo.desc}</div>}
+      {styleInfo && <div className="wave-hint" style={{ textAlign: 'center', marginTop: 8 }}>{styleInfo.desc}</div>}
 
-      {a && b && (
-        <div style={{ marginTop: 20, display: 'flex', justifyContent: 'center', gap: 14, alignItems: 'center' }}>
-          <LiquidMetalButton label="Mix the tracks" width={180} onClick={() => start(false)} disabled={busy} />
-          <button className="chip" disabled={busy} onClick={() => start(true)}>
-            Preview all styles (30s clips)
-          </button>
-        </div>
-      )}
       <Status {...(status || {})} />
       {previews && (
         <div className="results">
