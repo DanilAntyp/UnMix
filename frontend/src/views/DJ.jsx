@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from 'react'
 import { postForm, postJSON } from '../api'
 import { DropZone, Status, MediaCard, PanelHead, TrackFacts, IconNote } from '../ui'
 import { LiquidMetalButton } from '../LiquidMetalButton'
-import { fmtTime } from '../Waveform'
+import { Waveform, fmtTime } from '../Waveform'
 
 const STYLES = [
   { id: 'automix', name: 'AutoMix', desc: 'smooth Apple Music-style blend — best for pop, house, anything melodic' },
@@ -58,6 +58,7 @@ export function DJView() {
   const [beats, setBeats] = useState(32)
   const [status, setStatus] = useState(null)
   const [result, setResult] = useState(null)
+  const [previews, setPreviews] = useState(null)
   const [busy, setBusy] = useState(false)
   const pollRef = useRef(null)
 
@@ -65,14 +66,14 @@ export function DJView() {
   useEffect(() => { refresh() }, [])
   useEffect(() => () => clearTimeout(pollRef.current), [])
 
-  async function start() {
+  async function start(preview = false) {
     if (!a || !b || busy) return
-    setBusy(true); setResult(null)
+    setBusy(true); setResult(null); setPreviews(null)
     setStatus({ busy: true, text: 'Starting…' })
     try {
-      const data = await postJSON('/dj/start', {
-        a_file: decodeURI(a), b_file: decodeURI(b), style, beats,
-      })
+      const body = { a_file: decodeURI(a), b_file: decodeURI(b), style, beats }
+      if (preview) body.preview = true
+      const data = await postJSON('/dj/start', body)
       poll(data.job)
     } catch (e) {
       setStatus({ text: 'Error: ' + e.message, error: true })
@@ -87,6 +88,12 @@ export function DJView() {
       if (!j.done) {
         setStatus({ busy: true, text: j.stage, pct: j.pct })
         pollRef.current = setTimeout(() => poll(id), 1200)
+        return
+      }
+      if (j.previews) {
+        setStatus({ text: j.stage })
+        setPreviews(j.previews)
+        setBusy(false)
         return
       }
       setStatus({
@@ -131,11 +138,32 @@ export function DJView() {
       {styleInfo && <div className="wave-hint" style={{ marginTop: 8 }}>{styleInfo.desc}</div>}
 
       {a && b && (
-        <div style={{ marginTop: 20, display: 'flex', justifyContent: 'center' }}>
-          <LiquidMetalButton label="Mix the tracks" width={180} onClick={start} disabled={busy} />
+        <div style={{ marginTop: 20, display: 'flex', justifyContent: 'center', gap: 14, alignItems: 'center' }}>
+          <LiquidMetalButton label="Mix the tracks" width={180} onClick={() => start(false)} disabled={busy} />
+          <button className="chip" disabled={busy} onClick={() => start(true)}>
+            Preview all styles (30s clips)
+          </button>
         </div>
       )}
       <Status {...(status || {})} />
+      {previews && (
+        <div className="results">
+          {previews.map(p => p.error ? (
+            <div key={p.style} className="media-card glass-soft">
+              <div className="media-row"><span className="media-name">{p.style}</span>
+                <span style={{ color: '#ff6961', fontSize: '0.82rem' }}>{p.error}</span></div>
+            </div>
+          ) : (
+            <div key={p.style} className="media-card glass-soft">
+              <div className="media-row">
+                <span className="media-name">{STYLES.find(s => s.id === p.style)?.name || p.style}</span>
+                <button className="chip" onClick={() => setStyle(p.style)}>Use this style</button>
+              </div>
+              <Waveform src={encodeURI(p.file)} height={48} accent="#e8e8e8" />
+            </div>
+          ))}
+        </div>
+      )}
       {result && (
         <div className="results">
           <MediaCard title={decodeURIComponent(result.file.split('/').pop())}
