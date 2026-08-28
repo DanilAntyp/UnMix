@@ -333,32 +333,78 @@ def _prep(job, a_path, b_path, beats, need_stretch):
         af = (f"atempo={ratio:.4f}," if stretched and abs(ratio - 1) > 0.005 else "") + f"volume={gain_b:.3f}"
         _run(["ffmpeg", "-y", "-i", str(b_path), "-af", af, "-ac", "2", "-ar", "44100", str(out)])
         grid = analysis.beat_grid(out)
-        r_b, win_b = analysis.rms_profile(out)
-        med = _active_median(r_b)
-        b_start = 0.0
-        t = grid["bar"]
-        dur = _duration(out)
-        while t < min(60, dur - 8):
-            if _mean_rms(r_b, win_b, t, t + 2 * grid["bar_len"]) >= 0.6 * med:
-                b_start = t
+
+        def snap(t):
+            k = round((t - grid["bar"]) / grid["bar_len"])
+            return max(0.0, grid["bar"] + k * grid["bar_len"])
+
+        # structure-aware entry: the first section that plays at full energy
+        b_start = None
+        try:
+            secs = analysis.detect_sections(out)
+        except Exception:
+            secs = []
+        for s in secs:
+            if s["start"] > 90:
                 break
-            t += grid["bar_len"]
+            if s["energy"] >= 0.7:
+                b_start = snap(s["start"])
+                break
+        if b_start is None:  # fallback: first loud bar
+            r_b, win_b = analysis.rms_profile(out)
+            med = _active_median(r_b)
+            b_start = 0.0
+            t = grid["bar"]
+            dur = _duration(out)
+            while t < min(60, dur - 8):
+                if _mean_rms(r_b, win_b, t, t + 2 * grid["bar_len"]) >= 0.6 * med:
+                    b_start = t
+                    break
+                t += grid["bar_len"]
         return {"file": out, "b_start": b_start}
     ctx["make_b"] = make_b
     return ctx
 
 
 def _pick_cut(ctx, a_path, style, T):
+    import analysis
     dur_a = _duration(a_path)
     target = dur_a - (1.0 if style in HARD_STYLES else T + 1.0)
     if target < 10:
         raise ValueError("track A is too short for this transition length")
     grid_a, bar = ctx["grid_a"], ctx["bar"]
+    look = min(T, 8.0)
+
+    def snap(t):
+        k = round((t - grid_a["bar"]) / bar)
+        return grid_a["bar"] + k * bar
+
+    def alive(t):
+        return _mean_rms(ctx["r_a"], ctx["win_a"], t, t + look) >= 0.45 * ctx["med_a"]
+
+    # structure-aware: hand over at the END of the last high-energy section
+    # (i.e. right after the final chorus/drop, not inside the outro)
+    try:
+        secs = analysis.detect_sections(a_path)
+    except Exception:
+        secs = []
+    ctx["a_sections"] = secs
+    for s in reversed(secs):
+        if s["energy"] < 0.55 or s["end"] < 20:
+            continue
+        cut = snap(min(s["end"], target))
+        while cut > s["start"] + bar and not alive(cut):
+            cut -= bar
+        if cut > 20 and alive(cut):
+            ctx["cut_reason"] = "end of last high-energy section"
+            return cut
+
+    # fallback: latest loud bar before the target
     k = int((target - grid_a["bar"]) // bar)
     cut = grid_a["bar"] + k * bar
-    look = min(T, 8.0)
-    while cut > 20 and _mean_rms(ctx["r_a"], ctx["win_a"], cut, cut + look) < 0.45 * ctx["med_a"]:
+    while cut > 20 and not alive(cut):
         cut -= bar
+    ctx["cut_reason"] = "loudness fallback"
     return cut
 
 
@@ -428,6 +474,7 @@ def process_job(job_id, a_path, b_path, opts):
                     _slice(p, cut - win_start, T, out)
                     sa_cut[k2] = out
         job["transition_at"] = round(cut, 2)
+        job["cut_reason"] = ctx.get("cut_reason")
 
         out_name = f"{a_path.stem}_to_{b_path.stem}_{style}.mp3"
         out_path = DJ_DIR / out_name

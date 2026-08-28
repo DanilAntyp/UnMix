@@ -119,6 +119,66 @@ def beat_grid(path: Path, max_seconds: int = 180) -> dict:
             "beat_len": 60 / bpm, "bar_len": 4 * 60 / bpm}
 
 
+def detect_sections(path: Path, max_seconds: int = 600):
+    """Structural segmentation (Foote novelty on a self-similarity matrix).
+
+    Returns chronological sections [{start, end, energy}] where energy is
+    relative loudness (~1.0 = the loudest parts of the song, e.g. chorus/drop).
+    """
+    y = _load_mono(path, max_seconds)
+    S = _stft_mag(y)
+    fps = SR / HOP
+    step = max(1, int(0.5 * fps))            # ~0.5s feature frames
+    n_steps = S.shape[0] // step
+    if n_steps < 24:
+        return []
+
+    freqs = np.fft.rfftfreq(N_FFT, 1 / SR)
+    edges = np.geomspace(60, 8000, 25)
+    band_masks = [(freqs >= e0) & (freqs < e1) for e0, e1 in zip(edges[:-1], edges[1:])]
+    feats = np.zeros((n_steps, len(band_masks)))
+    rms_steps = np.zeros(n_steps)
+    for i in range(n_steps):
+        chunk = S[i * step:(i + 1) * step]
+        spec = chunk.mean(axis=0)
+        for j, m in enumerate(band_masks):
+            feats[i, j] = np.log1p(spec[m].mean()) if m.any() else 0.0
+        rms_steps[i] = np.sqrt((chunk ** 2).mean())
+
+    feats -= feats.mean(axis=0)
+    feats /= np.maximum(np.linalg.norm(feats, axis=1, keepdims=True), 1e-9)
+    ssm = feats @ feats.T
+
+    L = 16  # 8s checkerboard half-window
+    g = np.exp(-0.5 * (np.linspace(-1, 1, 2 * L) ** 2) / 0.25)
+    kern = np.outer(g, g)
+    sign = np.ones((2 * L, 2 * L))
+    sign[:L, L:] = -1
+    sign[L:, :L] = -1
+    kern *= sign
+    nov = np.zeros(n_steps)
+    for t in range(L, n_steps - L):
+        nov[t] = (ssm[t - L:t + L, t - L:t + L] * kern).sum()
+
+    thr = nov.mean() + 0.4 * nov.std()
+    bounds, last = [0.0], -999
+    for t in range(L, n_steps - L):
+        if nov[t] >= thr and nov[t] == nov[max(0, t - 8):t + 9].max() and t - last >= 8:
+            bounds.append(t * step / fps)
+            last = t
+    bounds.append(n_steps * step / fps)
+
+    peak = np.percentile(rms_steps, 95) + 1e-9
+    sections = []
+    for s0, s1 in zip(bounds[:-1], bounds[1:]):
+        i0 = int(s0 * fps / step)
+        i1 = max(i0 + 1, int(s1 * fps / step))
+        energy = float(rms_steps[i0:i1].mean() / peak)
+        sections.append({"start": round(s0, 2), "end": round(s1, 2),
+                         "energy": round(min(energy, 1.0), 3)})
+    return sections
+
+
 def align_beats(a_path: Path, a_start: float, b_path: Path, b_start: float,
                 dur: float, bpm: float) -> float:
     """Micro-align B's beats to A's inside the overlap: cross-correlate the two
