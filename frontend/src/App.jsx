@@ -4,6 +4,7 @@ import { ExtractView } from './views/Extract'
 import { StudioView } from './views/Studio'
 import { DJView } from './views/DJ'
 import { SetView } from './views/Set'
+import { LibraryView } from './views/Library'
 import { KaraokeView } from './views/Karaoke'
 import { MidiView } from './views/Midi'
 import { ConvertView } from './views/Convert'
@@ -18,6 +19,7 @@ const NAV = [
   { id: 'karaoke', label: 'Karaoke', icon: <IconMic /> },
   { id: 'midi', label: 'MIDI', icon: <IconPiano /> },
   { id: 'convert', label: 'Convert & Trim', icon: <IconScissors /> },
+  { id: 'library', label: 'Library', icon: <IconWave /> },
 ]
 
 const HERO = {
@@ -29,6 +31,7 @@ const HERO = {
   karaoke: ["Let's make karaoke", 'Mute the vocals — the lyrics appear in sync, word by word.'],
   midi: ['Audio to MIDI', 'Hear the notes, keep the notes — export a .mid for your DAW.'],
   convert: ['Reshape your audio', 'Convert between formats or cut out the part you need.'],
+  library: ['Your library', 'Everything you have downloaded, split, mixed and made — searchable.'],
 }
 
 export default function App() {
@@ -104,6 +107,7 @@ export default function App() {
           <div style={{ display: view === 'convert' ? 'block' : 'none' }}>
             <ConvertView />
           </div>
+          {view === 'library' && <LibraryView />}
         </div>
       </main>
     </div>

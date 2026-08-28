@@ -873,6 +873,127 @@ def studio_export():
     return jsonify(file=f"/converted/{out_name}", name=out_name)
 
 
+LIBRARY_DIRS = {
+    "downloads": (DL_DIR, "/downloads/"),
+    "stems": (OUT_DIR, "/separated/"),
+    "converted": (CONV_DIR, "/converted/"),
+    "mixes": (dj.DJ_DIR, "/djmixes/"),
+    "karaoke": (APP_DIR / "karaoke", "/karaoke/video/"),
+    "midi": (MIDI_DIR, "/midi/"),
+}
+MEDIA_EXTS = {".mp3", ".wav", ".flac", ".m4a", ".ogg", ".aac", ".mp4", ".mid"}
+
+
+@app.get("/library")
+def library():
+    items = []
+    for kind, (base, prefix) in LIBRARY_DIRS.items():
+        if not base.exists():
+            continue
+        for p in base.iterdir():
+            if p.suffix.lower() not in MEDIA_EXTS or p.name.startswith("."):
+                continue
+            st = p.stat()
+            items.append({"name": p.name, "kind": kind, "file": f"{prefix}{p.name}",
+                          "size": st.st_size, "mtime": int(st.st_mtime),
+                          "video": p.suffix.lower() == ".mp4",
+                          "midi": p.suffix.lower() == ".mid"})
+    items.sort(key=lambda x: -x["mtime"])
+    return jsonify(items=items[:500])
+
+
+def _resolve_library(url_path: str):
+    for kind, (base, prefix) in LIBRARY_DIRS.items():
+        if url_path.startswith(prefix):
+            p = (base / Path(url_path).name).resolve()
+            if p.parent == base.resolve() and p.is_file():
+                return p
+    return None
+
+
+@app.post("/library/delete")
+def library_delete():
+    data = request.get_json(silent=True) or {}
+    p = _resolve_library(data.get("file", ""))
+    if p is None:
+        return jsonify(error="file not found"), 404
+    p.unlink()
+    return jsonify(ok=True)
+
+
+@app.post("/library/rename")
+def library_rename():
+    data = request.get_json(silent=True) or {}
+    p = _resolve_library(data.get("file", ""))
+    new_name = re.sub(r"[/\\\x00]", "", (data.get("name") or "").strip())
+    if p is None or not new_name:
+        return jsonify(error="bad request"), 400
+    dest = p.with_name(new_name + p.suffix)
+    if dest.exists():
+        return jsonify(error="a file with that name already exists"), 400
+    p.rename(dest)
+    for kind, (base, prefix) in LIBRARY_DIRS.items():
+        if dest.parent == base.resolve():
+            return jsonify(ok=True, file=f"{prefix}{dest.name}", name=dest.name)
+    return jsonify(ok=True, name=dest.name)
+
+
+ACOUSTID_KEYS = ("cSpUJKpD", "v8pQ6oyB")  # tried in order; overridable via acoustid_key.txt
+
+
+def _acoustid_key():
+    cfg = APP_DIR / "acoustid_key.txt"
+    if cfg.exists():
+        return [cfg.read_text().strip()]
+    return list(ACOUSTID_KEYS)
+
+
+@app.post("/recognize")
+def recognize():
+    """Identify a track: chromaprint fingerprint -> AcoustID -> artist/title."""
+    import json as _json
+    import urllib.parse
+    import urllib.request
+    data = request.get_json(silent=True) or {}
+    p = _resolve_library(data.get("file", ""))
+    if p is None:
+        return jsonify(error="file not found"), 404
+    r = subprocess.run(["fpcalc", "-json", str(p)], capture_output=True, text=True)
+    if r.returncode != 0:
+        return jsonify(error="fingerprinting failed (is chromaprint installed?)"), 500
+    fp = _json.loads(r.stdout)
+    last_err = "no AcoustID key worked"
+    for key in _acoustid_key():
+        body = urllib.parse.urlencode({
+            "client": key, "duration": int(fp["duration"]),
+            "fingerprint": fp["fingerprint"], "meta": "recordings",
+        }).encode()
+        try:
+            req = urllib.request.Request("https://api.acoustid.org/v2/lookup", data=body)
+            resp = _json.load(urllib.request.urlopen(req, timeout=15))
+        except Exception as e:
+            last_err = str(e)
+            continue
+        if resp.get("status") != "ok":
+            last_err = resp.get("error", {}).get("message", "lookup failed")
+            continue
+        best = None
+        for res in resp.get("results", []):
+            for rec in res.get("recordings", []) or []:
+                if rec.get("title") and rec.get("artists"):
+                    cand = {"score": res.get("score", 0), "title": rec["title"],
+                            "artist": rec["artists"][0]["name"]}
+                    if best is None or cand["score"] > best["score"]:
+                        best = cand
+        if best is None:
+            return jsonify(found=False)
+        return jsonify(found=True, artist=best["artist"], title=best["title"],
+                       score=round(best["score"], 2),
+                       suggested=f"{best['artist']} - {best['title']}")
+    return jsonify(error=f"AcoustID unavailable: {last_err}. Put a free API key "
+                         f"from acoustid.org/new-application into acoustid_key.txt"), 502
+
+
 @app.post("/midi")
 def audio_to_midi():
     data = request.get_json(silent=True) or {}

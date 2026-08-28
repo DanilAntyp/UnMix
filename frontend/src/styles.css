@@ -494,6 +494,29 @@ video { width: 100%; border-radius: 10px; background: #000; }
 }
 .set-join-line { color: var(--faint); }
 .set-tl { padding: 5px 0; font-size: 0.88rem; color: #d1d1d6; }
+
+/* library */
+.lib-bar { display: flex; gap: 14px; align-items: center; flex-wrap: wrap; margin-bottom: 16px; }
+.lib-kinds { display: flex; gap: 6px; flex-wrap: wrap; }
+.lib-list { display: flex; flex-direction: column; gap: 4px; max-height: 560px; overflow-y: auto; }
+.lib-row {
+  display: flex; align-items: center; gap: 14px; cursor: pointer;
+  padding: 10px 14px; border-radius: 10px; font-size: 0.9rem;
+}
+.lib-row:hover { background: rgba(255, 255, 255, 0.04); }
+.lib-row.open { background: rgba(255, 255, 255, 0.06); }
+.lib-kind {
+  flex-shrink: 0; width: 78px; font-size: 0.72rem; text-transform: uppercase;
+  letter-spacing: 0.05em; color: var(--muted);
+}
+.lib-name { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text); }
+.lib-meta { flex-shrink: 0; font-size: 0.78rem; color: var(--faint); font-variant-numeric: tabular-nums; }
+.lib-detail {
+  padding: 12px 14px 16px; margin: 2px 0 6px; border-radius: 12px;
+  background: rgba(0, 0, 0, 0.25); border: 1px solid var(--hairline-soft);
+}
+.lib-actions { display: flex; gap: 8px; margin-top: 12px; flex-wrap: wrap; }
+.lib-recog { display: flex; align-items: center; gap: 12px; margin-top: 12px; font-size: 0.9rem; flex-wrap: wrap; }
 .set-tl-at { color: var(--muted); font-variant-numeric: tabular-nums; margin-right: 10px; }
 
 .compat {
