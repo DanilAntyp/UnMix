@@ -1,16 +1,18 @@
 """DJ transitions: join track A into track B with a proper DJ-style transition.
 
-What makes it sound right (AutoMix-style):
-  - bar-accurate grid: both tracks get a beat/downbeat grid; the transition
-    starts on a bar boundary of A and B enters on one of its own bar boundaries
-  - smart points: A hands over before its outro fade (not into silence),
-    B skips its quiet intro and enters at its first strong bar
-  - loudness match: B is gain-matched to A before mixing
-  - tempo match: B is stretched to A's BPM (comb-scored tempo detection)
+AutoMix pipeline (what makes it sound right):
+  - comb-scored BPM + bar grid on both tracks; everything lands on bar lines
+  - A hands over at a VOCAL PHRASE boundary before its outro fade (the vocal
+    stem's energy is used to find a gap, so no phrase gets cut mid-word)
+  - B skips its quiet intro and enters at its first strong bar
+  - B is tempo-stretched to A and gain-matched to A's loudness
+  - B's beats are micro-nudged onto A's (onset cross-correlation)
+  - choreography keeps dual-rhythm overlap to ~1 bar and never overlaps vocals;
+    the bass swap is a fast crossfade, not a hard mute
+  - risk detector: if tempos are too far apart or the beat alignment is not
+    confident, automix falls back to a short clean crossfade instead of mush
 
-Styles: automix (subtle stem blend), neural (theatrical stem swap), bassswap,
-crossfade, filter, echo, cut. Stems are separated only from the transition
-window, so jobs stay fast.
+Stems are separated only from the needed windows, so jobs stay fast.
 """
 import subprocess
 import tempfile
@@ -32,6 +34,7 @@ bp = Blueprint("dj", __name__)
 jobs = {}
 
 STYLES = ("automix", "neural", "bassswap", "crossfade", "filter", "echo", "cut")
+STEM_STYLES = ("automix", "neural", "bassswap")
 
 
 def _resolve(url_path: str):
@@ -73,7 +76,7 @@ def _mean_rms(r: np.ndarray, win: float, t0: float, t1: float) -> float:
     return float(seg.mean()) if len(seg) else 0.0
 
 
-def _separate_segment(src: Path, start: float, dur: float, work: Path, tag: str) -> dict:
+def _separate_window(src: Path, start: float, dur: float, work: Path, tag: str) -> dict:
     from demucs.api import save_audio
     import separator as sep_mod
     seg = work / f"{tag}_seg.wav"
@@ -91,39 +94,42 @@ def _separate_segment(src: Path, start: float, dur: float, work: Path, tag: str)
     return out
 
 
+def _slice(src: Path, start: float, dur: float, out: Path):
+    _run(["ffmpeg", "-y", "-i", str(src), "-ss", f"{start:.3f}", "-t", f"{dur:.3f}", str(out)])
+
+
 def _stem_envelopes(style: str, T: float, bar: float):
     def fade(kind, st, d):
-        st = min(st, T - 0.1)
+        st = max(0.0, min(st, T - 0.1))
         d = max(0.1, min(d, T - st))
         return f"afade=t={kind}:st={st:.3f}:d={d:.3f}"
 
     if style == "automix":
-        # Tight, phrase-safe choreography. The only moment two rhythm sections
-        # coexist is ~1 bar around the swap, so tempo drift can't turn to mush,
-        # and the two vocals never overlap at all.
+        # The only moment two rhythm sections coexist is ~1 bar around the
+        # swap; the two vocals never overlap; the bass swap is a fast fade.
         swap = T / 2
         a = {
-            "vocals": fade("out", 0, bar),                    # A vocal gone in 1 bar
-            "other": fade("out", bar, 2 * bar),               # melody hands over early
-            "bass": f"volume=0:enable='gte(t,{swap:.3f})'",   # bass swaps on the bar
-            "drums": fade("out", swap, bar),                  # 1 bar of drum overlap max
+            "vocals": fade("out", 0, bar),
+            "other": fade("out", bar, 2 * bar),
+            "bass": fade("out", swap - 0.15, 0.3),
+            "drums": fade("out", swap, bar),
         }
         b = {
-            "other": fade("in", bar, 2 * bar),                # pads rise over A's groove
-            "drums": f"volume=0:enable='lt(t,{swap:.3f})'",   # B beat DROPS on the bar
-            "bass": f"volume=0:enable='lt(t,{swap:.3f})'",
-            "vocals": fade("in", swap + bar, 2 * bar),        # B vocal only after A is gone
+            "other": fade("in", bar, 2 * bar),
+            "drums": f"volume=0:enable='lt(t,{swap:.3f})'",  # the beat drops on the bar
+            "bass": fade("in", swap - 0.05, 0.25),
+            "vocals": fade("in", swap + bar, 2 * bar),
         }
     elif style == "neural":
         a = {
             "vocals": fade("out", 0, 0.3 * T),
             "other": fade("out", 0.25 * T, 0.5 * T),
-            "bass": f"volume=0:enable='gte(t,{0.5 * T:.3f})'",
+            "bass": fade("out", 0.5 * T - 0.15, 0.3),
             "drums": fade("out", 0.5 * T, 0.5 * T),
         }
         b = {
             "drums": fade("in", 0, 0.4 * T),
-            "bass": f"volume=0:enable='lt(t,{0.5 * T:.3f})'",
+            "bass": fade("in", 0.5 * T - 0.05, 0.25),
             "other": fade("in", 0.15 * T, 0.45 * T),
             "vocals": fade("in", 0.3 * T, 0.5 * T),
         }
@@ -132,13 +138,13 @@ def _stem_envelopes(style: str, T: float, bar: float):
             "vocals": fade("out", 0, T),
             "other": fade("out", 0, T),
             "drums": fade("out", 0, T),
-            "bass": f"volume=0:enable='gte(t,{0.5 * T:.3f})'",
+            "bass": fade("out", 0.5 * T - 0.15, 0.3),
         }
         b = {
             "vocals": fade("in", 0, T),
             "other": fade("in", 0, T),
             "drums": fade("in", 0, T),
-            "bass": f"volume=0:enable='lt(t,{0.5 * T:.3f})'",
+            "bass": fade("in", 0.5 * T - 0.05, 0.25),
         }
     return a, b
 
@@ -165,7 +171,7 @@ def process_job(job_id, a_path, b_path, opts):
 
         # loudness match B to A
         r_a, win_a = analysis.rms_profile(a_path)
-        r_b0, win_b0 = analysis.rms_profile(b_path)
+        r_b0, _ = analysis.rms_profile(b_path)
         med_a, med_b = _active_median(r_a), _active_median(r_b0)
         gain_b = float(np.clip(med_a / med_b, 0.5, 2.0)) if med_b > 0 else 1.0
 
@@ -178,6 +184,12 @@ def process_job(job_id, a_path, b_path, opts):
         b_matched = work / "b_matched.wav"
         _run(["ffmpeg", "-y", "-i", str(b_path), "-af", af, "-ac", "2", "-ar", "44100", str(b_matched)])
         job["stretch"] = round(ratio, 4)
+
+        # tempo sanity: too far apart -> automix falls back to a clean fade
+        if style == "automix" and not (0.9 <= ratio <= 1.12):
+            job["fallback"] = f"crossfade (tempos too far apart, x{ratio:.2f})"
+            style = "crossfade"
+            T = min(T, 4 * bar_a)
 
         # B entry point: first strong bar (skip a quiet intro)
         grid_bm = analysis.beat_grid(b_matched)
@@ -203,30 +215,71 @@ def process_job(job_id, a_path, b_path, opts):
         look = min(T, 8.0)
         while cut > 20 and _mean_rms(r_a, win_a, cut, cut + look) < 0.45 * med_a:
             cut -= bar_a
+
+        sa = None
+        win_start = 0.0
+        if style in STEM_STYLES:
+            # one separation of A's tail window: used both to find a vocal
+            # phrase boundary for the cut AND for the transition stems
+            win_start = max(0.0, min(cut - 6 * bar_a, dur_a - T - 2) - 2 * bar_a)
+            win_len = dur_a - win_start
+            job["stage"] = "Extracting stems from track A (Demucs)..."
+            sa = _separate_window(a_path, win_start, win_len, work, "a")
+
+            # refine the cut: prefer a bar boundary inside a vocal gap
+            r_v, win_v = analysis.rms_profile(sa["vocals"])
+            med_v = _active_median(r_v)
+            if med_v > 1e-4:
+                cand = cut
+                best = None
+                for _ in range(8):  # try up to 8 bars back
+                    local = cand - win_start
+                    if local < 0:
+                        break
+                    voc = _mean_rms(r_v, win_v, max(0, local - 0.3), local + 0.75 * bar_a)
+                    energy_ok = _mean_rms(r_a, win_a, cand, cand + look) >= 0.45 * med_a
+                    if voc < 0.35 * med_v and energy_ok:
+                        best = cand
+                        break
+                    cand -= bar_a
+                if best is not None:
+                    cut = best
         job["transition_at"] = round(cut, 2)
 
         out_name = f"{a_path.stem}_to_{b_path.stem}_{style}.mp3"
         out_path = DJ_DIR / out_name
         X = 0.05  # seam crossfade
 
-        if style in ("automix", "neural", "bassswap"):
-            job["stage"] = "Extracting stems from track A (Demucs)..."
-            sa = _separate_segment(a_path, cut, T, work, "a")
+        delay_ms = int(cut * 1000)
+        if style in STEM_STYLES:
             job["stage"] = "Extracting stems from track B (Demucs)..."
-            sb = _separate_segment(b_matched, b_start, T, work, "b")
+            sb = _separate_window(b_matched, b_start, T, work, "b")
 
             # micro-align B's beats onto A's inside the overlap
-            delta = analysis.align_beats(a_path, cut, b_matched, b_start,
-                                         min(T, 4 * bar_a), bpm)
+            delta, conf = analysis.align_beats(a_path, cut, b_matched, b_start,
+                                               min(T, 4 * bar_a), bpm)
             job["nudge_ms"] = int(delta * 1000)
+            job["beat_confidence"] = round(conf, 2)
             delay_ms = max(0, int((cut + delta) * 1000))
+            if style == "automix" and conf < 0.25:
+                job["fallback"] = "crossfade (low beat-match confidence)"
+                style = "crossfade"
+                T = min(T, 4 * bar_a)
+
+        if style in STEM_STYLES:
+            # slice A's transition stems out of the analyzed window
+            sa_cut = {}
+            for k2, p in sa.items():
+                out = work / f"a_{k2}_cut.wav"
+                _slice(p, cut - win_start, T, out)
+                sa_cut[k2] = out
 
             job["stage"] = "Rendering the transition..."
             env_a, env_b = _stem_envelopes(style, T, bar_a)
             cmd = ["ffmpeg", "-y", "-i", str(a_path)]
             order = ["vocals", "drums", "bass", "other"]
             for k2 in order:
-                cmd += ["-i", str(sa[k2])]
+                cmd += ["-i", str(sa_cut[k2])]
             for k2 in order:
                 cmd += ["-i", str(sb[k2])]
             cmd += ["-i", str(b_matched)]
@@ -265,7 +318,7 @@ def process_job(job_id, a_path, b_path, opts):
             fc = (f"[0:a]atrim=0:{cut + T:.3f},asendcmd=c='{send}',highpass@sw=f=20,"
                   f"afade=t=out:st={cut + 0.6 * T:.3f}:d={0.4 * T:.3f}[a]"
                   f";[1:a]atrim={b_start:.3f},asetpts=PTS-STARTPTS,afade=t=in:st=0:d={0.6 * T:.3f},"
-                  f"adelay={int(cut * 1000)}|{int(cut * 1000)}[b]"
+                  f"adelay={delay_ms}|{delay_ms}[b]"
                   f";[a][b]amix=inputs=2:duration=longest:normalize=0,alimiter=limit=0.97[out]")
             _run(["ffmpeg", "-y", "-i", str(a_path), "-i", str(b_matched),
                   "-filter_complex", fc, "-map", "[out]", "-c:a", "libmp3lame", "-b:a", "320k", str(out_path)])
@@ -280,7 +333,7 @@ def process_job(job_id, a_path, b_path, opts):
                   f"apad=pad_dur={tail:.3f},aecho=0.8:0.7:{beat_ms}|{beat_ms * 2}:0.5|0.3[atail]"
                   f";[ahead][atail]concat=n=2:v=0:a=1[aall]"
                   f";[1:a]atrim={b_start:.3f},asetpts=PTS-STARTPTS,afade=t=in:st=0:d=0.3,"
-                  f"adelay={int(cut * 1000)}|{int(cut * 1000)}[b]"
+                  f"adelay={delay_ms}|{delay_ms}[b]"
                   f";[aall][b]amix=inputs=2:duration=longest:normalize=0,alimiter=limit=0.97[out]")
             _run(["ffmpeg", "-y", "-i", str(a_path), "-i", str(b_matched),
                   "-filter_complex", fc, "-map", "[out]", "-c:a", "libmp3lame", "-b:a", "320k", str(out_path)])

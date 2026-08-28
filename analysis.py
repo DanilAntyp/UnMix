@@ -137,20 +137,25 @@ def align_beats(a_path: Path, a_start: float, b_path: Path, b_start: float,
         ea, eb = seg_env(a_path, a_start), seg_env(b_path, b_start)
         n = min(len(ea), len(eb))
         if n < 16:
-            return 0.0
+            return 0.0, 0.0
         ea, eb = ea[:n], eb[:n]
         max_lag = int(0.6 * beat * fps)
-        best, best_lag = -1e18, 0
+        scores, lags = [], []
         for lag in range(-max_lag, max_lag + 1):
             if lag >= 0:
                 s = float((ea[lag:] * eb[:n - lag]).sum())
             else:
                 s = float((ea[:n + lag] * eb[-lag:]).sum())
-            if s > best:
-                best, best_lag = s, lag
-        return float(np.clip(best_lag / fps, -0.5 * beat, 0.5 * beat))
+            scores.append(s)
+            lags.append(lag)
+        arr = np.array(scores)
+        best_i = int(np.argmax(arr))
+        spread = arr.max() - arr.min()
+        conf = float((arr.max() - np.median(arr)) / spread) if spread > 0 else 0.0
+        delta = float(np.clip(lags[best_i] / fps, -0.5 * beat, 0.5 * beat))
+        return delta, conf
     except Exception:
-        return 0.0
+        return 0.0, 0.0
 
 
 def rms_profile(path: Path, max_seconds: int = 600, win: float = 0.4):

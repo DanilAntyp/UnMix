@@ -87,7 +87,8 @@ export function DJView() {
       setStatus({
         text: `Done! Transition at ${fmtTime(j.transition_at)}` +
           (j.b_skip > 0.5 ? ` · B enters from ${fmtTime(j.b_skip)} (intro skipped)` : '') +
-          (Math.abs(j.stretch - 1) > 0.005 ? ` · B stretched ×${j.stretch}` : ''),
+          (Math.abs(j.stretch - 1) > 0.005 ? ` · B stretched ×${j.stretch}` : '') +
+          (j.fallback ? ` · fell back to ${j.fallback}` : ''),
       })
       setResult(j)
       setBusy(false)
