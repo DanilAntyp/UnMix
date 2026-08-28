@@ -289,7 +289,28 @@ def _detect_sections_impl(path: Path, max_seconds: int):
         energy = float(rms_steps[i0:i1].mean() / peak)
         sections.append({"start": round(s0, 2), "end": round(s1, 2),
                          "energy": round(min(energy, 1.0), 3)})
+    _label_sections(sections)
     return sections
+
+
+def _label_sections(secs):
+    """Heuristic functional labels from energy + position: the top-energy
+    cluster is 'chorus', quiet edges are intro/outro, quiet middles 'break'."""
+    if not secs:
+        return
+    n = len(secs)
+    e_hi = max(s["energy"] for s in secs)
+    for i, s in enumerate(secs):
+        if i == 0 and s["energy"] < 0.55:
+            s["label"] = "intro"
+        elif i == n - 1 and s["energy"] < 0.55:
+            s["label"] = "outro"
+        elif 0 < i < n - 1 and s["energy"] <= 0.5:
+            s["label"] = "break"
+        elif s["energy"] >= e_hi - 0.08:
+            s["label"] = "chorus"
+        else:
+            s["label"] = "verse"
 
 
 def align_beats(a_path: Path, a_start: float, b_path: Path, b_start: float,

@@ -233,8 +233,13 @@ def _phrase_prev(t, sections, grid, phrase_bars=4):
 
 
 def _find_drop(sections, limit=120.0):
-    """B's 'drop': the first strong section arriving after a quieter one, or
-    the first full-energy section as a fallback."""
+    """B's 'drop': the first CHORUS-labeled section, else the first strong
+    section arriving after a quieter one, else the first full-energy one."""
+    for s in sections or []:
+        if s["start"] > limit:
+            break
+        if s.get("label") == "chorus":
+            return s["start"]
     prev_e = None
     for s in sections or []:
         if s["start"] > limit:
@@ -616,19 +621,28 @@ def _exit_candidates(ctx, a_path, style, T, limit=3):
         secs = []
     ctx["a_sections"] = secs
     cands = []
-    for s in reversed(secs):
-        if len(cands) >= limit:
-            break
-        if s["energy"] < 0.55 or s["end"] < 20:
-            continue
+
+    def consider(s, reason):
         cut = _phrase_snap(min(s["end"], target), secs, grid_a)
         while cut > target:
             cut = _phrase_prev(cut, secs, grid_a)
         while cut > s["start"] + bar and not alive(cut):
             cut = _phrase_prev(cut, secs, grid_a)
-        if cut > 20 and alive(cut):
-            cands.append((cut, s["energy"], "end of last high-energy phrase"
-                          if not cands else "end of an earlier phrase"))
+        if cut > 20 and alive(cut) and all(abs(cut - c) > 1 for c, _, _ in cands):
+            cands.append((cut, s["energy"], reason))
+
+    # labeled choruses first — "hand over right after the chorus"
+    for s in reversed(secs):
+        if len(cands) >= limit:
+            break
+        if s.get("label") == "chorus" and s["end"] >= 20:
+            consider(s, "end of last chorus" if not cands else "end of an earlier chorus")
+    for s in reversed(secs):
+        if len(cands) >= limit:
+            break
+        if s["energy"] < 0.55 or s["end"] < 20 or s.get("label") == "chorus":
+            continue
+        consider(s, "end of a high-energy phrase")
     if not cands:
         cut = _phrase_snap(target, secs, grid_a)
         while cut > target:
@@ -871,34 +885,90 @@ def dj_feedback():
     return jsonify(ok=True, bias=_feedback_bias())
 
 
-def _set_job(job, paths, beats):
-    """Playlist AutoMix: order tracks by BPM/key compatibility, then chain them
-    with stem-blend joins into one continuous set."""
+def _order_tracks(paths, grids, facts):
+    """Greedy chain minimizing tempo distance + key penalty."""
+    import math
+    import analysis
+    n = len(paths)
+    bpms = [g["bpm"] or 120 for g in grids]
+    start = min(range(n), key=lambda i: abs(bpms[i] - float(np.median(bpms))))
+    order, used = [start], {start}
+    while len(order) < n:
+        cur = order[-1]
+
+        def cost(j):
+            r = _fold_ratio(bpms[cur] / bpms[j])
+            shift, clash = analysis.harmony_plan(facts[cur].get("camelot"),
+                                                 facts[j].get("camelot"))
+            return abs(math.log(r)) * 3 + (1.0 if clash else 0.25 * abs(shift))
+        nxt = min((j for j in range(n) if j not in used), key=cost)
+        order.append(nxt)
+        used.add(nxt)
+    return order, bpms
+
+
+SET_JOIN_STYLES = ("automix", "tapestop", "cut")
+
+
+def _set_plan_job(job, paths):
+    """Analyze + order the tracks and suggest a join style per pair, without
+    rendering anything - the UI lets the user reorder and adjust first."""
     import analysis
     try:
         n = len(paths)
-        facts, grids = [], []
+        facts, grids, sigs = [], [], []
         for i, p in enumerate(paths):
             job["stage"] = f"Analyzing tracks... ({i + 1}/{n})"
+            job["pct"] = round(i / max(1, n) * 100, 1)
+            grids.append(_load_grid(analysis, p))
+            facts.append(analysis.analyze(p))
+            sigs.append(analysis.style_signals(p))
+        order, bpms = _order_tracks(paths, grids, facts)
+        tracks = [{"file": f"/downloads/{Path(paths[i]).name}", "name": Path(paths[i]).name,
+                   "bpm": bpms[i], "camelot": facts[i].get("camelot")}
+                  for i in order]
+        joins = []
+        for k in range(1, n):
+            a, b = order[k - 1], order[k]
+            clash = analysis.harmony_plan(facts[a].get("camelot"), facts[b].get("camelot"))[1]
+            hardpair = sigs[a]["onset_density"] >= 2.8 and sigs[b]["onset_density"] >= 2.8
+            joins.append({"style": "tapestop" if hardpair else "automix",
+                          "note": ("hard pair - tape stop" if hardpair else
+                                   "keys clash - rhythm-only blend" if clash else "smooth blend")})
+        job["plan"] = {"tracks": tracks, "joins": joins}
+        job["stage"] = "Plan ready - reorder or adjust join styles, then render."
+    except Exception as e:
+        job["error"] = str(e)
+    finally:
+        job["done"] = True
+
+
+def _set_job(job, paths, beats, join_styles=None, ordered=False):
+    """Playlist AutoMix: chain the tracks with per-join transitions into one
+    continuous set. paths may be pre-ordered by the user (ordered=True)."""
+    import analysis
+    import djfx
+    try:
+        n = len(paths)
+        total_steps = n * 2 + (n - 1) * 3 + 2
+        step = {"i": 0}
+
+        def prog(stage):
+            step["i"] += 1
+            job["stage"] = stage
+            job["pct"] = round(min(99.0, step["i"] / total_steps * 100), 1)
+
+        facts, grids = [], []
+        for i, p in enumerate(paths):
+            prog(f"Analyzing tracks... ({i + 1}/{n})")
             grids.append(_load_grid(analysis, p))
             facts.append(analysis.analyze(p))
 
-        # ordering: greedy chain minimizing tempo distance + key penalty
-        import math
-        bpms = [g["bpm"] or 120 for g in grids]
-        start = min(range(n), key=lambda i: abs(bpms[i] - float(np.median(bpms))))
-        order, used = [start], {start}
-        while len(order) < n:
-            cur = order[-1]
-
-            def cost(j):
-                r = _fold_ratio(bpms[cur] / bpms[j])
-                shift, clash = analysis.harmony_plan(facts[cur].get("camelot"),
-                                                     facts[j].get("camelot"))
-                return abs(math.log(r)) * 3 + (1.0 if clash else 0.25 * abs(shift))
-            nxt = min((j for j in range(n) if j not in used), key=cost)
-            order.append(nxt)
-            used.add(nxt)
+        if ordered:
+            order = list(range(n))
+            bpms = [g["bpm"] or 120 for g in grids]
+        else:
+            order, bpms = _order_tracks(paths, grids, facts)
         job["order"] = [Path(paths[i]).stem for i in order]
 
         work = Path(tempfile.mkdtemp(prefix="djset_"))
@@ -906,11 +976,10 @@ def _set_job(job, paths, beats):
         r0, _ = analysis.rms_profile(paths[order[0]])
         med0 = _active_median(r0)
 
-        # build tempo-chained, gain-matched versions of every track
         matched, mgrids = [], []
         target_bpm = bpms[order[0]]
         for k, i in enumerate(order):
-            job["stage"] = f"Tempo-chaining... ({k + 1}/{n})"
+            prog(f"Tempo-chaining... ({k + 1}/{n})")
             ratio = 1.0 if k == 0 else _fold_ratio(target_bpm / bpms[i])
             ri, _ = analysis.rms_profile(paths[i])
             gain = float(np.clip(med0 / max(_active_median(ri), 1e-6), 0.5, 2.0))
@@ -921,67 +990,98 @@ def _set_job(job, paths, beats):
             mgrids.append(_grid_scaled(grids[i], ratio if abs(ratio - 1) > 0.005 else 1.0))
             target_bpm = bpms[i] * ratio
 
-        pieces = []           # wav pieces to be joined with tiny crossfades
+        pieces = []
         tracklist = [{"title": Path(paths[order[0]]).stem, "at": 0.0}]
         pos = 0.0
         prev_start = 0.0
         for k in range(1, n):
+            st = "automix"
+            if join_styles and k - 1 < len(join_styles) and join_styles[k - 1] in SET_JOIN_STYLES:
+                st = join_styles[k - 1]
             A, B = matched[k - 1], matched[k]
             ga, gb = mgrids[k - 1], mgrids[k]
             bpm = ga["bpm"] or 120
             T = max(2.0, beats * 60.0 / bpm)
-            job["stage"] = f"Join {k}/{n - 1}: picking points..."
+            prog(f"Join {k}/{n - 1} ({st}): picking points...")
             r_a, win_a = analysis.rms_profile(A)
             ctx = {"grid_a": ga, "bar": ga["bar_len"], "r_a": r_a, "win_a": win_a,
                    "med_a": _active_median(r_a)}
-            a_cands = _exit_candidates(ctx, A, "automix", T)
+            a_cands = _exit_candidates(ctx, A, st, T)
             secs_b = analysis.detect_sections(B)
             bvar = {"snap": lambda t, g=gb: _snap_grid(t, g), "sections": secs_b,
                     "drop": _find_drop(secs_b), "loud": gb["bar"]}
-            b_cands = _entry_candidates(bvar, "automix", T)
+            b_cands = _entry_candidates(bvar, st, T)
             _, cut, b_start, _, _, _, _ = _choose_pair(a_cands, b_cands)
             clash = analysis.harmony_plan(facts[order[k - 1]].get("camelot"),
-                                                  facts[order[k]].get("camelot"))[1]
+                                          facts[order[k]].get("camelot"))[1]
 
-            job["stage"] = f"Join {k}/{n - 1}: stems (Demucs)..."
-            sa = _separate_window(A, cut, T, work, f"a{k}")
-            sb = _separate_window(B, b_start, T, work, f"b{k}")
-            delta = analysis.align_beats(A, cut, B, b_start, min(T, 4 * ga["bar_len"]), bpm)[0]
+            if st == "automix":
+                prog(f"Join {k}/{n - 1}: stems (Demucs)...")
+                sa = _separate_window(A, cut, T, work, f"a{k}")
+                sb = _separate_window(B, b_start, T, work, f"b{k}")
+                delta = analysis.align_beats(A, cut, B, b_start, min(T, 4 * ga["bar_len"]), bpm)[0]
 
-            job["stage"] = f"Join {k}/{n - 1}: rendering..."
-            env_a, env_b = _stem_envelopes("automix", T, ga["bar_len"], clash)
-            v = _vocal_safe_start(sb["vocals"], T / 2 + ga["bar_len"], T)
-            if v is not None:
-                env_b["vocals"] = f"volume=0:enable='lt(t,{v:.3f})',afade=t=in:st={v:.3f}:d=0.5"
-            join = work / f"join{k}.wav"
-            order_s = ["vocals", "drums", "bass", "other"]
-            cmd = ["ffmpeg", "-y"]
-            for s in order_s:
-                cmd += ["-i", str(sa[s])]
-            for s in order_s:
-                cmd += ["-i", str(sb[s])]
-            fa = [f"[{i2}:a]{env_a[s]}[sa{i2}]" for i2, s in enumerate(order_s)]
-            fb = [f"[{i2 + 4}:a]{env_b[s]},adelay={max(0, int(delta * 1000))}|{max(0, int(delta * 1000))}[sb{i2}]"
-                  for i2, s in enumerate(order_s)]
-            fc = ";".join(fa + fb) + (
-                ";[sa0][sa1][sa2][sa3]amix=inputs=4:normalize=0[at]"
-                ";[sb0][sb1][sb2][sb3]amix=inputs=4:normalize=0[bt]"
-                ";[at][bt]amix=inputs=2:duration=longest:normalize=0,alimiter=limit=0.97[out]")
-            _run(cmd + ["-filter_complex", fc, "-map", "[out]", str(join)])
+                prog(f"Join {k}/{n - 1}: rendering...")
+                env_a, env_b = _stem_envelopes("automix", T, ga["bar_len"], clash)
+                v = _vocal_safe_start(sb["vocals"], T / 2 + ga["bar_len"], T)
+                if v is not None:
+                    env_b["vocals"] = f"volume=0:enable='lt(t,{v:.3f})',afade=t=in:st={v:.3f}:d=0.5"
+                join = work / f"join{k}.wav"
+                order_s = ["vocals", "drums", "bass", "other"]
+                cmd = ["ffmpeg", "-y"]
+                for s in order_s:
+                    cmd += ["-i", str(sa[s])]
+                for s in order_s:
+                    cmd += ["-i", str(sb[s])]
+                dms = max(0, int(delta * 1000))
+                fa = [f"[{i2}:a]{env_a[s]}[sa{i2}]" for i2, s in enumerate(order_s)]
+                fb = [f"[{i2 + 4}:a]{env_b[s]},adelay={dms}|{dms}[sb{i2}]"
+                      for i2, s in enumerate(order_s)]
+                fc = ";".join(fa + fb) + (
+                    ";[sa0][sa1][sa2][sa3]amix=inputs=4:normalize=0[at]"
+                    ";[sb0][sb1][sb2][sb3]amix=inputs=4:normalize=0[bt]"
+                    ";[at][bt]amix=inputs=2:duration=longest:normalize=0,alimiter=limit=0.97[out]")
+                _run(cmd + ["-filter_complex", fc, "-map", "[out]", str(join)])
 
-            head = work / f"head{k}.wav"
-            _extract(matched[k - 1], prev_start, cut - prev_start, head)
-            pieces += [head, join]
-            pos += (cut - prev_start) + T / 2
-            tracklist.append({"title": Path(paths[order[k]]).stem, "at": round(pos, 1)})
-            pos += T / 2 - X * 2
-            prev_start = b_start + T - X
+                head = work / f"head{k}.wav"
+                _extract(A, prev_start, cut - prev_start, head)
+                pieces += [head, join]
+                pos += (cut - prev_start) + T / 2
+                tracklist.append({"title": Path(paths[order[k]]).stem, "at": round(pos, 1)})
+                pos += T / 2 - X * 2
+                prev_start = b_start + T - X
+            elif st == "tapestop":
+                prog(f"Join {k}/{n - 1}: tape stop...")
+                fx_dur = min(1.2, max(0.5, ga["bar_len"] / 2))
+                seg = work / f"fxsrc{k}.wav"
+                _extract(A, cut - fx_dur, fx_dur, seg)
+                y, sr = djfx.load(seg)
+                chunk = work / f"fx{k}.wav"
+                djfx.save(chunk, djfx.tape_stop(y, sr, fx_dur), sr)
+                head = work / f"head{k}.wav"
+                _extract(A, prev_start, cut - fx_dur - prev_start, head)
+                prog(f"Join {k}/{n - 1}: assembling...")
+                pieces += [head, chunk]
+                pos += (cut - fx_dur - prev_start) + fx_dur - X * 2
+                tracklist.append({"title": Path(paths[order[k]]).stem, "at": round(pos, 1)})
+                prev_start = b_start
+                prog(f"Join {k}/{n - 1}: done")
+            else:  # cut
+                prog(f"Join {k}/{n - 1}: cut...")
+                head = work / f"head{k}.wav"
+                _extract(A, prev_start, cut - prev_start, head)
+                pieces.append(head)
+                pos += (cut - prev_start) - X
+                tracklist.append({"title": Path(paths[order[k]]).stem, "at": round(pos, 1)})
+                prev_start = b_start
+                prog(f"Join {k}/{n - 1}: assembling...")
+                prog(f"Join {k}/{n - 1}: done")
 
         tail = work / "tail.wav"
         _extract(matched[-1], prev_start, _duration(matched[-1]) - prev_start, tail)
         pieces.append(tail)
 
-        job["stage"] = "Stitching the set..."
+        prog("Stitching the set...")
         acc = pieces[0]
         for i, p in enumerate(pieces[1:]):
             nxt = work / f"acc{i}.wav"
@@ -991,15 +1091,31 @@ def _set_job(job, paths, beats):
             acc = nxt
         out_name = f"set_{uuid.uuid4().hex[:6]}.mp3"
         out_path = DJ_DIR / out_name
+        prog("Encoding...")
         _run(["ffmpeg", "-y", "-i", str(acc), "-c:a", "libmp3lame", "-b:a", "320k", str(out_path)])
 
         job["tracklist"] = tracklist
         job["file"] = f"/djmixes/{out_name}"
         job["stage"] = "Done!"
+        job["pct"] = 100.0
     except Exception as e:
         job["error"] = str(e)
     finally:
         job["done"] = True
+
+
+@bp.post("/dj/set/plan")
+def dj_set_plan():
+    data = request.get_json(silent=True) or {}
+    paths = [_resolve(f) for f in (data.get("files") or [])]
+    if any(p is None for p in paths) or len(paths) < 2:
+        return jsonify(error="pick at least two tracks"), 400
+    job_id = uuid.uuid4().hex[:12]
+    jobs[job_id] = {"stage": "Starting...", "done": False, "error": None}
+    threading.Thread(target=_set_plan_job,
+                     args=(jobs[job_id], paths),
+                     daemon=True).start()
+    return jsonify(job=job_id)
 
 
 @bp.post("/dj/set/start")
@@ -1011,7 +1127,10 @@ def dj_set_start():
     beats = int(data.get("beats") or 32)
     job_id = uuid.uuid4().hex[:12]
     jobs[job_id] = {"stage": "Starting...", "done": False, "error": None, "file": None}
-    threading.Thread(target=_set_job, args=(jobs[job_id], paths, beats), daemon=True).start()
+    threading.Thread(target=_set_job,
+                     args=(jobs[job_id], paths, beats, data.get("join_styles"),
+                           bool(data.get("ordered"))),
+                     daemon=True).start()
     return jsonify(job=job_id)
 
 

@@ -78,6 +78,11 @@ export function TransitionLane({ src, info, marker, onMarker, label, note }) {
         }
         ctx.fillStyle = 'rgba(255,255,255,0.10)'
         ctx.fillRect(x0, 0, 1, h)
+        if (s.label && x1 - x0 > 34) {
+          ctx.fillStyle = 'rgba(255,255,255,0.4)'
+          ctx.font = '9px -apple-system, sans-serif'
+          ctx.fillText(s.label, x0 + 4, 10)
+        }
       }
       // waveform, brightness follows section energy
       const mid = h / 2

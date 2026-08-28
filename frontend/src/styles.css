@@ -488,6 +488,11 @@ video { width: 100%; border-radius: 10px; background: #000; }
 .set-row.on { color: var(--text); background: rgba(255, 255, 255, 0.06); border-color: rgba(255, 255, 255, 0.12); }
 .set-row input { accent-color: #d9d9d9; }
 .set-name { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.set-order-btns { display: flex; gap: 4px; flex-shrink: 0; }
+.set-join {
+  display: flex; align-items: center; gap: 12px; padding: 6px 12px 6px 26px;
+}
+.set-join-line { color: var(--faint); }
 .set-tl { padding: 5px 0; font-size: 0.88rem; color: #d1d1d6; }
 .set-tl-at { color: var(--muted); font-variant-numeric: tabular-nums; margin-right: 10px; }
 
