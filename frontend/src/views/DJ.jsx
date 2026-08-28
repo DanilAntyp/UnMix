@@ -5,7 +5,12 @@ import { LiquidMetalButton } from '../LiquidMetalButton'
 import { fmtTime } from '../Waveform'
 
 const STYLES = [
-  { id: 'automix', name: 'AutoMix', desc: 'Apple Music-style smooth blend: phrase-aligned, intro-skipping, loudness-matched (recommended)' },
+  { id: 'automix', name: 'AutoMix', desc: 'smooth Apple Music-style blend — best for pop, house, anything melodic' },
+  { id: 'acapella', name: 'Acapella bridge', desc: "A's vocal goes naked, then B's beat drops underneath it — check the keys match" },
+  { id: 'tapestop', name: 'Tape stop', desc: 'A powers down like a turntable, B slams in — for hard rap / trap' },
+  { id: 'looproll', name: 'Loop roll', desc: 'last bar stutters faster and faster into the drop' },
+  { id: 'backspin', name: 'Backspin', desc: 'rewind spin, then B drops — hip-hop radio classic' },
+  { id: 'riser', name: 'Riser', desc: 'noise sweep builds over A, B drops on the peak — EDM style' },
   { id: 'neural', name: 'Neural stem swap', desc: 'vocals leave first, bass swaps on the drop, drums hand over last' },
   { id: 'bassswap', name: 'Bass swap', desc: 'everything blends, the basslines hard-swap halfway' },
   { id: 'crossfade', name: 'Crossfade', desc: 'classic equal-power blend' },

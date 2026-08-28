@@ -33,8 +33,10 @@ DJ_DIR.mkdir(exist_ok=True)
 bp = Blueprint("dj", __name__)
 jobs = {}
 
-STYLES = ("automix", "neural", "bassswap", "crossfade", "filter", "echo", "cut")
-STEM_STYLES = ("automix", "neural", "bassswap")
+STYLES = ("automix", "acapella", "tapestop", "looproll", "backspin", "riser",
+          "neural", "bassswap", "crossfade", "filter", "echo", "cut")
+STEM_STYLES = ("automix", "neural", "bassswap", "acapella")
+HARD_STYLES = ("cut", "echo", "tapestop", "looproll", "backspin", "riser")
 
 
 def _resolve(url_path: str):
@@ -98,6 +100,21 @@ def _slice(src: Path, start: float, dur: float, out: Path):
     _run(["ffmpeg", "-y", "-i", str(src), "-ss", f"{start:.3f}", "-t", f"{dur:.3f}", str(out)])
 
 
+def _fx_chunk(src: Path, start: float, src_dur: float, work: Path, fn) -> Path:
+    """Extract [start, start+src_dur] of src and run a djfx function over it."""
+    import djfx
+    seg_wav = work / "fx_src.wav"
+    _run(["ffmpeg", "-y", "-i", str(src), "-ss", f"{max(0, start):.3f}", "-t", f"{src_dur:.3f}",
+          "-ac", "2", "-ar", "44100", str(seg_wav)])
+    y, sr = djfx.load(seg_wav)
+    out = work / "fx_out.wav"
+    djfx.save(out, fn(y, sr), sr)
+    return out
+
+
+AFMT = "aformat=sample_fmts=fltp:sample_rates=44100:channel_layouts=stereo"
+
+
 def _stem_envelopes(style: str, T: float, bar: float):
     def fade(kind, st, d):
         st = max(0.0, min(st, T - 0.1))
@@ -119,6 +136,23 @@ def _stem_envelopes(style: str, T: float, bar: float):
             "drums": f"volume=0:enable='lt(t,{swap:.3f})'",  # the beat drops on the bar
             "bass": fade("in", swap - 0.05, 0.25),
             "vocals": fade("in", swap + bar, 2 * bar),
+        }
+    elif style == "acapella":
+        # A's instruments leave fast, A's vocal stands NAKED, then B's beat
+        # drops underneath it; A vocal bows out, B vocal takes over.
+        swap = 0.4 * T
+        quick = min(bar, 0.15 * T)
+        a = {
+            "vocals": fade("out", 0.72 * T, 0.2 * T),
+            "drums": fade("out", 0, quick),
+            "bass": fade("out", 0, quick),
+            "other": fade("out", 0, quick),
+        }
+        b = {
+            "drums": f"volume=0:enable='lt(t,{swap:.3f})'",
+            "bass": fade("in", swap - 0.05, 0.25),
+            "other": fade("in", swap, bar),
+            "vocals": fade("in", 0.78 * T, 0.18 * T),
         }
     elif style == "neural":
         a = {
@@ -207,7 +241,7 @@ def process_job(job_id, a_path, b_path, opts):
 
         # A handover point: a bar boundary before the outro fade
         dur_a = _duration(a_path)
-        target = dur_a - (1.0 if style in ("cut", "echo") else T + 1.0)
+        target = dur_a - (1.0 if style in HARD_STYLES else T + 1.0)
         if target < 10:
             raise ValueError("track A is too short for this transition length")
         k = int((target - grid_a["bar"]) // bar_a)
@@ -227,9 +261,10 @@ def process_job(job_id, a_path, b_path, opts):
             sa = _separate_window(a_path, win_start, win_len, work, "a")
 
             # refine the cut: prefer a bar boundary inside a vocal gap
+            # (except acapella, which WANTS the vocal running at the cut)
             r_v, win_v = analysis.rms_profile(sa["vocals"])
             med_v = _active_median(r_v)
-            if med_v > 1e-4:
+            if med_v > 1e-4 and style != "acapella":
                 cand = cut
                 best = None
                 for _ in range(8):  # try up to 8 bars back
@@ -336,6 +371,47 @@ def process_job(job_id, a_path, b_path, opts):
                   f"adelay={delay_ms}|{delay_ms}[b]"
                   f";[aall][b]amix=inputs=2:duration=longest:normalize=0,alimiter=limit=0.97[out]")
             _run(["ffmpeg", "-y", "-i", str(a_path), "-i", str(b_matched),
+                  "-filter_complex", fc, "-map", "[out]", "-c:a", "libmp3lame", "-b:a", "320k", str(out_path)])
+
+        elif style in ("tapestop", "backspin", "looproll"):
+            job["stage"] = "Rendering the transition..."
+            import djfx
+            if style == "tapestop":
+                fx_dur = min(1.2, max(0.5, bar_a / 2))
+                chunk = _fx_chunk(a_path, cut - fx_dur, fx_dur, work,
+                                  lambda y, sr: djfx.tape_stop(y, sr, fx_dur))
+            elif style == "backspin":
+                fx_dur = min(1.0, max(0.45, bar_a / 2))
+                src_len = min(cut - fx_dur, 3.5 * fx_dur)
+                chunk = _fx_chunk(a_path, cut - fx_dur - src_len, src_len, work,
+                                  lambda y, sr: djfx.backspin(y, sr, fx_dur))
+            else:  # looproll
+                fx_dur = bar_a
+                chunk = _fx_chunk(a_path, cut - bar_a, bar_a, work,
+                                  lambda y, sr: djfx.loop_roll(y, sr, bar_a))
+            head_end = cut - fx_dur
+            fc = (f"[0:a]atrim=0:{head_end:.3f},{AFMT}[h]"
+                  f";[1:a]{AFMT}[fx]"
+                  f";[h][fx]concat=n=2:v=0:a=1[aall]"
+                  f";[2:a]atrim={b_start:.3f},asetpts=PTS-STARTPTS,afade=t=in:st=0:d=0.01,"
+                  f"adelay={int(cut * 1000)}|{int(cut * 1000)}[bd]"
+                  f";[aall][bd]amix=inputs=2:duration=longest:normalize=0,alimiter=limit=0.97[out]")
+            _run(["ffmpeg", "-y", "-i", str(a_path), "-i", str(chunk), "-i", str(b_matched),
+                  "-filter_complex", fc, "-map", "[out]", "-c:a", "libmp3lame", "-b:a", "320k", str(out_path)])
+
+        elif style == "riser":
+            job["stage"] = "Rendering the transition..."
+            import djfx
+            rise_dur = 4 * bar_a
+            rise = work / "riser.wav"
+            djfx.save(rise, djfx.riser(44100, rise_dur, gain=0.4 * float(med_a + 1e-3) * 3), 44100)
+            rise_at = max(0, int((cut - rise_dur) * 1000))
+            fc = (f"[0:a]atrim=0:{cut:.3f},afade=t=out:st={cut - 0.05:.3f}:d=0.05[a]"
+                  f";[1:a]{AFMT},adelay={rise_at}|{rise_at}[r]"
+                  f";[2:a]atrim={b_start:.3f},asetpts=PTS-STARTPTS,afade=t=in:st=0:d=0.01,"
+                  f"adelay={int(cut * 1000)}|{int(cut * 1000)}[bd]"
+                  f";[a][r][bd]amix=inputs=3:duration=longest:normalize=0,alimiter=limit=0.97[out]")
+            _run(["ffmpeg", "-y", "-i", str(a_path), "-i", str(rise), "-i", str(b_matched),
                   "-filter_complex", fc, "-map", "[out]", "-c:a", "libmp3lame", "-b:a", "320k", str(out_path)])
 
         else:  # cut
