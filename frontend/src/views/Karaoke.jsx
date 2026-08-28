@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { postForm, postJSON } from '../api'
 import { DropZone, Status, MediaCard, PanelHead, IconMic } from '../ui'
+import { LiquidMetalButton } from '../LiquidMetalButton'
 
 const STEM_OPTS = [
   { key: 'vocals', label: 'Vocals' },
@@ -74,7 +75,7 @@ export function KaraokeView({ handoff }) {
   }
 
   return (
-    <div className="glass">
+    <div className="glass metal-scope">
       <PanelHead
         tile="tile-rose" icon={<IconMic />}
         title="Karaoke Mode" sub="Real synced lyrics, words light up as they are sung"
@@ -94,10 +95,8 @@ export function KaraokeView({ handoff }) {
       </div>
 
       {picked && (
-        <div style={{ marginTop: 18 }}>
-          <button className="btn-primary wide" onClick={start} disabled={busy}>
-            Create karaoke video
-          </button>
+        <div style={{ marginTop: 20, display: 'flex', justifyContent: 'center' }}>
+          <LiquidMetalButton label="Create karaoke video" width={220} onClick={start} disabled={busy} />
         </div>
       )}
       <Status {...(status || {})} />
