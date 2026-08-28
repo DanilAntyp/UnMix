@@ -103,6 +103,24 @@ def _detect_key(S: np.ndarray):
     return {"key": f"{name} {mode}", "camelot": CAMELOT[(name, mode)]}
 
 
+def snap_to_beat(path: Path, target_sec: float, window: float = 1.5) -> float:
+    """Snap a time to the strongest onset near it (approximate beat alignment)."""
+    try:
+        y = _load_mono(path, max_seconds=int(target_sec + window + 2))
+        S = _stft_mag(y)
+        flux = np.diff(S, axis=0)
+        np.maximum(flux, 0, out=flux)
+        env = flux.sum(axis=1)
+        fps = SR / HOP
+        lo = max(0, int((target_sec - window) * fps))
+        hi = min(len(env) - 1, int((target_sec + window) * fps))
+        if hi <= lo:
+            return target_sec
+        return (lo + int(np.argmax(env[lo:hi]))) / fps
+    except Exception:
+        return target_sec
+
+
 def analyze(path: Path) -> dict:
     y = _load_mono(path)
     S = _stft_mag(y)

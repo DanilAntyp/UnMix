@@ -20,6 +20,7 @@ from flask import Flask, request, send_from_directory, jsonify
 import separator
 from separator import get_separator, sep_lock
 import karaoke
+import dj
 
 APP_DIR = Path(__file__).parent
 OUT_DIR = APP_DIR / "separated"
@@ -34,6 +35,7 @@ PROGRESS = {}  # yt-dlp download progress, keyed by client-chosen id
 app = Flask(__name__)
 app.config["MAX_CONTENT_LENGTH"] = 500 * 1024 * 1024
 app.register_blueprint(karaoke.bp)
+app.register_blueprint(dj.bp)
 MIDI_DIR = APP_DIR / "midi"
 MIDI_DIR.mkdir(exist_ok=True)
 
@@ -752,7 +754,8 @@ CONV_FORMATS = {
 }
 
 
-SERVED_DIRS = {"/downloads/": DL_DIR, "/separated/": OUT_DIR, "/converted/": CONV_DIR}
+SERVED_DIRS = {"/downloads/": DL_DIR, "/separated/": OUT_DIR, "/converted/": CONV_DIR,
+               "/djmixes/": dj.DJ_DIR}
 
 
 def resolve_served(url_path: str):

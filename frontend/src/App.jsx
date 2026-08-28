@@ -2,15 +2,17 @@ import { useState } from 'react'
 import { DownloadView } from './views/Download'
 import { ExtractView } from './views/Extract'
 import { StudioView } from './views/Studio'
+import { DJView } from './views/DJ'
 import { KaraokeView } from './views/Karaoke'
 import { MidiView } from './views/Midi'
 import { ConvertView } from './views/Convert'
-import { IconDownload, IconWave, IconMic, IconScissors, IconSliders, IconPiano } from './ui'
+import { IconDownload, IconWave, IconMic, IconScissors, IconSliders, IconPiano, IconNote } from './ui'
 
 const NAV = [
   { id: 'download', label: 'Download', icon: <IconDownload /> },
   { id: 'extract', label: 'Extract', icon: <IconWave /> },
   { id: 'studio', label: 'Studio', icon: <IconSliders /> },
+  { id: 'dj', label: 'DJ', icon: <IconNote /> },
   { id: 'karaoke', label: 'Karaoke', icon: <IconMic /> },
   { id: 'midi', label: 'MIDI', icon: <IconPiano /> },
   { id: 'convert', label: 'Convert & Trim', icon: <IconScissors /> },
@@ -20,6 +22,7 @@ const HERO = {
   download: ['Grab a song', 'Paste a YouTube link — take the audio or the video with you.'],
   extract: ["Let's take it apart", 'AI splits any song into vocals, drums, bass and more.'],
   studio: ['Remix the stems', 'Every instrument on its own fader — rebalance and export your mix.'],
+  dj: ['Blend two tracks', 'Beat-matched DJ transitions — the stems trade places, not just fade.'],
   karaoke: ["Let's make karaoke", 'Mute the vocals — the lyrics appear in sync, word by word.'],
   midi: ['Audio to MIDI', 'Hear the notes, keep the notes — export a .mid for your DAW.'],
   convert: ['Reshape your audio', 'Convert between formats or cut out the part you need.'],
@@ -82,6 +85,9 @@ export default function App() {
           </div>
           <div style={{ display: view === 'studio' ? 'block' : 'none' }}>
             <StudioView handoff={studioHandoff} />
+          </div>
+          <div style={{ display: view === 'dj' ? 'block' : 'none' }}>
+            <DJView />
           </div>
           <div style={{ display: view === 'midi' ? 'block' : 'none' }}>
             <MidiView />
