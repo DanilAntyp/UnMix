@@ -49,16 +49,20 @@ def backspin(seg: np.ndarray, sr: int, dur: float) -> np.ndarray:
     return out
 
 
-def loop_roll(bar: np.ndarray, sr: int, bar_dur: float) -> np.ndarray:
-    """Stutter build-up from the bar's first sub-chunk: 1/2, 1/4, 1/8, 1/16 x2."""
+def loop_roll(seg: np.ndarray, sr: int, beat_dur: float) -> np.ndarray:
+    """Classic 2-bar roll into the drop: a 1-beat loop repeated, then halving
+    subdivisions each repeated to fill their slot — 1 beat x4, 1/2 x4,
+    1/4 x4, 1/8 x8 (accelerating stutter, total 8 beats)."""
     pieces = []
     fade = int(0.004 * sr)
-    for frac in (0.5, 0.25, 0.125, 0.0625, 0.0625):
-        n = max(fade * 2 + 1, int(bar_dur * frac * sr))
-        p = bar[:min(n, len(bar))].copy()
+    pattern = [(1.0, 4), (0.5, 4), (0.25, 4), (0.125, 8)]
+    for frac, reps in pattern:
+        n = max(fade * 2 + 1, int(beat_dur * frac * sr))
+        p = seg[:min(n, len(seg))].copy()
         p[:fade] *= np.linspace(0, 1, fade)[:, None]
         p[-fade:] *= np.linspace(1, 0, fade)[:, None]
-        pieces.append(p)
+        for _ in range(reps):
+            pieces.append(p)
     return np.concatenate(pieces)
 
 

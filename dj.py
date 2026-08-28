@@ -209,10 +209,12 @@ def process_job(job_id, a_path, b_path, opts):
         med_a, med_b = _active_median(r_a), _active_median(r_b0)
         gain_b = float(np.clip(med_a / med_b, 0.5, 2.0)) if med_b > 0 else 1.0
 
-        # tempo-match (and gain-match) B
+        # tempo-match (and gain-match) B — but only for styles where the two
+        # tracks actually overlap rhythmically; hard styles stop A first, so B
+        # must play at its own original tempo
         job["stage"] = "Tempo-matching track B..."
         ratio = 1.0
-        if grid_a["bpm"] and grid_b["bpm"]:
+        if style not in HARD_STYLES and grid_a["bpm"] and grid_b["bpm"]:
             ratio = _fold_ratio(grid_a["bpm"] / grid_b["bpm"])
         af = (f"atempo={ratio:.4f}," if abs(ratio - 1) > 0.005 else "") + f"volume={gain_b:.3f}"
         b_matched = work / "b_matched.wav"
@@ -386,9 +388,10 @@ def process_job(job_id, a_path, b_path, opts):
                 chunk = _fx_chunk(a_path, cut - fx_dur - src_len, src_len, work,
                                   lambda y, sr: djfx.backspin(y, sr, fx_dur))
             else:  # looproll
-                fx_dur = bar_a
-                chunk = _fx_chunk(a_path, cut - bar_a, bar_a, work,
-                                  lambda y, sr: djfx.loop_roll(y, sr, bar_a))
+                fx_dur = 2 * bar_a
+                beat = bar_a / 4
+                chunk = _fx_chunk(a_path, cut - fx_dur, 2 * beat, work,
+                                  lambda y, sr: djfx.loop_roll(y, sr, beat))
             head_end = cut - fx_dur
             fc = (f"[0:a]atrim=0:{head_end:.3f},{AFMT}[h]"
                   f";[1:a]{AFMT}[fx]"
