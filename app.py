@@ -813,6 +813,25 @@ def get_converted(name):
     return send_from_directory(CONV_DIR, name)
 
 
+ANALYSIS_CACHE = {}
+
+
+@app.post("/analyze")
+def analyze_track():
+    data = request.get_json(silent=True) or {}
+    path = resolve_served(data.get("server_file", ""))
+    if path is None:
+        return jsonify(error="file not found"), 404
+    cache_key = (str(path), path.stat().st_mtime)
+    if cache_key not in ANALYSIS_CACHE:
+        try:
+            import analysis
+            ANALYSIS_CACHE[cache_key] = analysis.analyze(path)
+        except Exception as e:
+            return jsonify(error=str(e)), 500
+    return jsonify(ANALYSIS_CACHE[cache_key])
+
+
 @app.get("/separated/<path:name>")
 def get_separated(name):
     return send_from_directory(OUT_DIR, name)

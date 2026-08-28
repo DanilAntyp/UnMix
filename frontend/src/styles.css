@@ -247,6 +247,20 @@ input[type=file] { display: none; }
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
 .media-actions { display: flex; gap: 8px; flex-shrink: 0; }
+.facts {
+  flex-shrink: 0; margin-left: auto; margin-right: 4px;
+  font-size: 0.78rem; font-weight: 600; color: var(--tint);
+  background: rgba(170, 255, 0, 0.09); border: 1px solid rgba(170, 255, 0, 0.2);
+  padding: 4px 10px; border-radius: 7px;
+  font-variant-numeric: tabular-nums; white-space: nowrap;
+}
+.facts.dim { color: var(--faint); background: rgba(255, 255, 255, 0.04); border-color: var(--hairline-soft); }
+.facts-key { color: var(--muted); font-weight: 500; }
+.metal-scope .facts {
+  color: #e4e4e4; background: rgba(255, 255, 255, 0.06);
+  border-color: rgba(255, 255, 255, 0.12); border-radius: 100px;
+}
+.metal-scope .facts.dim { color: var(--faint); }
 video { width: 100%; border-radius: 10px; background: #000; }
 
 /* ---------- waveform player ---------- */

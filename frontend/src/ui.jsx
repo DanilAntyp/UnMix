@@ -1,5 +1,31 @@
-import { useRef, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { Waveform } from './Waveform'
+
+/* ---------- BPM + key badges (server-side files only) ---------- */
+export function TrackFacts({ url }) {
+  const [facts, setFacts] = useState(null)
+  useEffect(() => {
+    let cancelled = false
+    setFacts(null)
+    fetch('/analyze', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ server_file: decodeURI(url) }),
+    })
+      .then(r => r.json())
+      .then(d => { if (!cancelled) setFacts(d) })
+      .catch(() => { if (!cancelled) setFacts({ error: true }) })
+    return () => { cancelled = true }
+  }, [url])
+  if (facts?.error) return null
+  if (!facts) return <span className="facts dim">analyzing…</span>
+  return (
+    <span className="facts" title={facts.key}>
+      {Math.round(facts.bpm)} BPM{facts.camelot ? ` · ${facts.camelot}` : ''}
+      {facts.key ? <span className="facts-key"> {facts.key}</span> : null}
+    </span>
+  )
+}
 
 /* ---------- inline stroke icons ---------- */
 const I = props => ({
@@ -87,6 +113,7 @@ export function MediaCard({ title, url, video, actions, accent }) {
     <div className="media-card glass-soft">
       <div className="media-row">
         <span className="media-name" title={name}>{title}</span>
+        {!video && <TrackFacts url={url} />}
         <span className="media-actions">
           {actions}
           <a className="chip" href={safe} download={name}>Download</a>

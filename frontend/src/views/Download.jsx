@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { postJSON, pollProgress, fmtMB } from '../api'
-import { Status, MediaCard, PanelHead, IconDownload } from '../ui'
+import { Status, MediaCard, PanelHead, IconDownload, TrackFacts } from '../ui'
 import { Waveform } from '../Waveform'
 import { ConvertControls } from '../ConvertControls'
 import { LiquidMetalButton } from '../LiquidMetalButton'
@@ -114,6 +114,7 @@ export function DownloadView({ onExtract, onKaraoke }) {
           <div className="media-card glass-soft">
             <div className="media-row">
               <span className="media-name">{result.title}</span>
+              <TrackFacts url={result.file} />
               <span className="media-actions">
                 <button className="chip" onClick={() => onExtract(result.file, result.title)}>
                   Extract sound →
