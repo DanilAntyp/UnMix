@@ -119,6 +119,40 @@ def beat_grid(path: Path, max_seconds: int = 180) -> dict:
             "beat_len": 60 / bpm, "bar_len": 4 * 60 / bpm}
 
 
+def align_beats(a_path: Path, a_start: float, b_path: Path, b_start: float,
+                dur: float, bpm: float) -> float:
+    """Micro-align B's beats to A's inside the overlap: cross-correlate the two
+    onset envelopes and return the extra delay (seconds, within ±half a beat)
+    to add to B so its transients land on A's."""
+    try:
+        beat = 60.0 / max(bpm, 1)
+        fps = SR / HOP
+
+        def seg_env(path, start):
+            y = _load_mono(path, max_seconds=int(start + dur + 2))
+            y = y[int(start * SR):int((start + dur) * SR)]
+            e = _onset_env(_stft_mag(y))
+            return e - e.mean()
+
+        ea, eb = seg_env(a_path, a_start), seg_env(b_path, b_start)
+        n = min(len(ea), len(eb))
+        if n < 16:
+            return 0.0
+        ea, eb = ea[:n], eb[:n]
+        max_lag = int(0.6 * beat * fps)
+        best, best_lag = -1e18, 0
+        for lag in range(-max_lag, max_lag + 1):
+            if lag >= 0:
+                s = float((ea[lag:] * eb[:n - lag]).sum())
+            else:
+                s = float((ea[:n + lag] * eb[-lag:]).sum())
+            if s > best:
+                best, best_lag = s, lag
+        return float(np.clip(best_lag / fps, -0.5 * beat, 0.5 * beat))
+    except Exception:
+        return 0.0
+
+
 def rms_profile(path: Path, max_seconds: int = 600, win: float = 0.4):
     """Coarse loudness envelope: (rms_per_window, window_seconds)."""
     y = _load_mono(path, max_seconds)

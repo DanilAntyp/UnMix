@@ -91,48 +91,53 @@ def _separate_segment(src: Path, start: float, dur: float, work: Path, tag: str)
     return out
 
 
-def _stem_envelopes(style: str, T: float):
+def _stem_envelopes(style: str, T: float, bar: float):
     def fade(kind, st, d):
-        return f"afade=t={kind}:st={st * T:.3f}:d={d * T:.3f}"
+        st = min(st, T - 0.1)
+        d = max(0.1, min(d, T - st))
+        return f"afade=t={kind}:st={st:.3f}:d={d:.3f}"
 
     if style == "automix":
-        # gentle, Apple-AutoMix-like: long overlapping fades, bass never doubled
+        # Tight, phrase-safe choreography. The only moment two rhythm sections
+        # coexist is ~1 bar around the swap, so tempo drift can't turn to mush,
+        # and the two vocals never overlap at all.
+        swap = T / 2
         a = {
-            "vocals": fade("out", 0, 0.4),
-            "other": fade("out", 0.2, 0.55),
-            "bass": fade("out", 0.45, 0.2),
-            "drums": fade("out", 0.55, 0.45),
+            "vocals": fade("out", 0, bar),                    # A vocal gone in 1 bar
+            "other": fade("out", bar, 2 * bar),               # melody hands over early
+            "bass": f"volume=0:enable='gte(t,{swap:.3f})'",   # bass swaps on the bar
+            "drums": fade("out", swap, bar),                  # 1 bar of drum overlap max
         }
         b = {
-            "drums": fade("in", 0, 0.3),
-            "other": fade("in", 0.2, 0.45),
-            "bass": fade("in", 0.55, 0.15),
-            "vocals": fade("in", 0.5, 0.4),
+            "other": fade("in", bar, 2 * bar),                # pads rise over A's groove
+            "drums": f"volume=0:enable='lt(t,{swap:.3f})'",   # B beat DROPS on the bar
+            "bass": f"volume=0:enable='lt(t,{swap:.3f})'",
+            "vocals": fade("in", swap + bar, 2 * bar),        # B vocal only after A is gone
         }
     elif style == "neural":
         a = {
-            "vocals": fade("out", 0, 0.3),
-            "other": fade("out", 0.25, 0.5),
+            "vocals": fade("out", 0, 0.3 * T),
+            "other": fade("out", 0.25 * T, 0.5 * T),
             "bass": f"volume=0:enable='gte(t,{0.5 * T:.3f})'",
-            "drums": fade("out", 0.5, 0.5),
+            "drums": fade("out", 0.5 * T, 0.5 * T),
         }
         b = {
-            "drums": fade("in", 0, 0.4),
+            "drums": fade("in", 0, 0.4 * T),
             "bass": f"volume=0:enable='lt(t,{0.5 * T:.3f})'",
-            "other": fade("in", 0.15, 0.45),
-            "vocals": fade("in", 0.3, 0.5),
+            "other": fade("in", 0.15 * T, 0.45 * T),
+            "vocals": fade("in", 0.3 * T, 0.5 * T),
         }
     else:  # bassswap
         a = {
-            "vocals": fade("out", 0, 1.0),
-            "other": fade("out", 0, 1.0),
-            "drums": fade("out", 0, 1.0),
+            "vocals": fade("out", 0, T),
+            "other": fade("out", 0, T),
+            "drums": fade("out", 0, T),
             "bass": f"volume=0:enable='gte(t,{0.5 * T:.3f})'",
         }
         b = {
-            "vocals": fade("in", 0, 1.0),
-            "other": fade("in", 0, 1.0),
-            "drums": fade("in", 0, 1.0),
+            "vocals": fade("in", 0, T),
+            "other": fade("in", 0, T),
+            "drums": fade("in", 0, T),
             "bass": f"volume=0:enable='lt(t,{0.5 * T:.3f})'",
         }
     return a, b
@@ -210,8 +215,14 @@ def process_job(job_id, a_path, b_path, opts):
             job["stage"] = "Extracting stems from track B (Demucs)..."
             sb = _separate_segment(b_matched, b_start, T, work, "b")
 
+            # micro-align B's beats onto A's inside the overlap
+            delta = analysis.align_beats(a_path, cut, b_matched, b_start,
+                                         min(T, 4 * bar_a), bpm)
+            job["nudge_ms"] = int(delta * 1000)
+            delay_ms = max(0, int((cut + delta) * 1000))
+
             job["stage"] = "Rendering the transition..."
-            env_a, env_b = _stem_envelopes(style, T)
+            env_a, env_b = _stem_envelopes(style, T, bar_a)
             cmd = ["ffmpeg", "-y", "-i", str(a_path)]
             order = ["vocals", "drums", "bass", "other"]
             for k2 in order:
@@ -228,7 +239,7 @@ def process_job(job_id, a_path, b_path, opts):
                 f";[ahead][atrans]acrossfade=d={X}[aall]"
                 f";[9:a]atrim={b_start + T - X:.3f},asetpts=PTS-STARTPTS[brest]"
                 f";[btrans][brest]acrossfade=d={X}[ball]"
-                f";[ball]adelay={int(cut * 1000)}|{int(cut * 1000)}[bd]"
+                f";[ball]adelay={delay_ms}|{delay_ms}[bd]"
                 f";[aall][bd]amix=inputs=2:duration=longest:normalize=0,alimiter=limit=0.97[out]"
             )
             cmd += ["-filter_complex", fc, "-map", "[out]", "-c:a", "libmp3lame", "-b:a", "320k", str(out_path)]
