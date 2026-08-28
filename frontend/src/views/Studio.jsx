@@ -5,38 +5,57 @@ import { LiquidMetalButton } from '../LiquidMetalButton'
 import { fmtTime } from '../Waveform'
 
 const ORDER = ['vocals', 'drums', 'bass', 'other']
+const COLS = 700
 
-export function StudioView() {
+export function StudioView({ handoff }) {
   const [picked, setPicked] = useState(null)
   const [songName, setSongName] = useState('')
   const [stems, setStems] = useState(null)
   const [status, setStatus] = useState(null)
   const [busy, setBusy] = useState(false)
 
+  useEffect(() => {
+    if (handoff?.file) {
+      setPicked(null)
+      openServer(handoff.file,
+        decodeURIComponent(handoff.file.split('/').pop()).replace(/\.[^.]+$/, ''))
+    }
+  }, [handoff])
+
   function pick(f) {
     setPicked(f); setStems(null); setStatus(null)
+  }
+
+  async function openServer(serverFile, name) {
+    setBusy(true); setStems(null)
+    const stop = pollProgress('/progress/sep', pct =>
+      setStatus({ busy: true, text: 'Separating into stems…', pct }))
+    try {
+      setStatus({ busy: true, text: 'Separating into stems…', pct: 0 })
+      const data = await postJSON('/separate', { server_file: decodeURI(serverFile), remove: 'all', model: 'htdemucs' })
+      stop()
+      setStatus(null)
+      setSongName(name)
+      setStems(data.all)
+    } catch (e) {
+      stop()
+      setStatus({ text: 'Error: ' + e.message, error: true })
+    } finally { setBusy(false) }
   }
 
   async function split() {
     if (!picked || busy) return
     setBusy(true)
     setStatus({ busy: true, text: 'Uploading…' })
-    let stop = () => {}
     try {
       const fd = new FormData()
       fd.append('audio', picked)
       const up = await postForm('/upload', fd)
-      setSongName(up.name.replace(/\.[^.]+$/, ''))
-      stop = pollProgress('/progress/sep', pct =>
-        setStatus({ busy: true, text: 'Separating into stems…', pct }))
-      const data = await postJSON('/separate', { server_file: up.file, remove: 'all', model: 'htdemucs' })
-      stop()
-      setStatus(null)
-      setStems(data.all)
+      await openServer(up.file, up.name.replace(/\.[^.]+$/, ''))
     } catch (e) {
-      stop()
       setStatus({ text: 'Error: ' + e.message, error: true })
-    } finally { setBusy(false) }
+      setBusy(false)
+    }
   }
 
   return (
@@ -58,8 +77,92 @@ export function StudioView() {
         </>
       )}
       <Status {...(status || {})} />
-      {stems && <StudioPlayer stems={stems} name={songName} onClose={() => { setStems(null); setPicked(null) }} />}
+      {stems && <StudioPlayer stems={stems} name={songName}
+        onClose={() => { setStems(null); setPicked(null); setStatus(null) }} />}
     </div>
+  )
+}
+
+/* Main mix waveform: per-stem column peaks are precomputed once; the drawn
+   height of each column follows the live fader gains, so muting the bass
+   visibly thins the waveform. Click plays from there, drag selects a region. */
+function StudioWave({ amps, effGains, pos, duration, sel, onSeekPlay, onSelect }) {
+  const ref = useRef(null)
+  const dragRef = useRef(null)
+
+  useEffect(() => {
+    const canvas = ref.current
+    if (!canvas) return
+    const draw = () => {
+      const dpr = window.devicePixelRatio || 1
+      const w = canvas.offsetWidth, h = canvas.offsetHeight
+      if (!w) return
+      canvas.width = w * dpr
+      canvas.height = h * dpr
+      const ctx = canvas.getContext('2d')
+      ctx.scale(dpr, dpr)
+      ctx.clearRect(0, 0, w, h)
+      const mid = h / 2
+      const bw = w / COLS
+      const playedX = duration ? (pos / duration) * w : 0
+      for (let i = 0; i < COLS; i++) {
+        let a = 0
+        for (const k in amps) a += (effGains[k] || 0) * amps[k][i]
+        a = Math.min(1, a)
+        const half = Math.max(0.8, a * mid * 0.94)
+        const x = i * bw
+        ctx.fillStyle = x <= playedX ? '#e8e8e8' : 'rgba(255,255,255,0.25)'
+        ctx.fillRect(x, mid - half, Math.max(1, bw * 0.72), half * 2)
+      }
+      if (sel && duration) {
+        const x1 = (sel[0] / duration) * w
+        const x2 = (sel[1] / duration) * w
+        ctx.fillStyle = 'rgba(255,255,255,0.13)'
+        ctx.fillRect(x1, 0, x2 - x1, h)
+        ctx.fillStyle = 'rgba(255,255,255,0.75)'
+        ctx.fillRect(x1, 0, 1.5, h)
+        ctx.fillRect(x2 - 1.5, 0, 1.5, h)
+      }
+    }
+    draw()
+    window.addEventListener('resize', draw)
+    return () => window.removeEventListener('resize', draw)
+  }, [amps, effGains, pos, duration, sel])
+
+  function timeAt(e) {
+    const rect = ref.current.getBoundingClientRect()
+    const x = Math.min(Math.max(e.clientX - rect.left, 0), rect.width)
+    return (x / rect.width) * duration
+  }
+  function down(e) {
+    if (!duration) return
+    e.currentTarget.setPointerCapture(e.pointerId)
+    dragRef.current = { t0: timeAt(e), moved: false, cur: null }
+  }
+  function move(e) {
+    const d = dragRef.current
+    if (!d) return
+    const t = timeAt(e)
+    if (Math.abs(t - d.t0) > duration / 200) d.moved = true
+    if (d.moved) {
+      d.cur = [Math.min(d.t0, t), Math.max(d.t0, t)]
+      onSelect(d.cur)
+    }
+  }
+  function up(e) {
+    const d = dragRef.current
+    dragRef.current = null
+    if (!d) return
+    if (!d.moved) {
+      onSelect(null)
+      onSeekPlay(timeAt(e))
+    }
+  }
+
+  return (
+    <canvas ref={ref}
+      style={{ width: '100%', height: 110, cursor: 'crosshair', touchAction: 'none', display: 'block' }}
+      onPointerDown={down} onPointerMove={move} onPointerUp={up} />
   )
 }
 
@@ -74,9 +177,11 @@ function StudioPlayer({ stems, name, onClose }) {
   const stateRef = useRef({})
 
   const [ready, setReady] = useState(false)
+  const [amps, setAmps] = useState(null)     // k -> Float32Array(COLS) column peaks
   const [playing, setPlaying] = useState(false)
   const [pos, setPos] = useState(0)
   const [duration, setDuration] = useState(0)
+  const [sel, setSel] = useState(null)
   const [gains, setGains] = useState({ vocals: 1, drums: 1, bass: 1, other: 1 })
   const [muted, setMuted] = useState({})
   const [solo, setSolo] = useState(null)
@@ -98,6 +203,24 @@ function StudioPlayer({ stems, name, onClose }) {
       if (cancelled) return
       buffersRef.current = Object.fromEntries(entries)
       setDuration(Math.max(...entries.map(([, b]) => b.duration)))
+      const a = {}
+      for (const [k, b] of entries) {
+        const ch = b.getChannelData(0)
+        const col = new Float32Array(COLS)
+        const step = Math.max(1, Math.floor(ch.length / COLS))
+        const stride = Math.max(1, Math.floor(step / 40))
+        for (let i = 0; i < COLS; i++) {
+          let m = 0
+          const lim = Math.min((i + 1) * step, ch.length)
+          for (let j = i * step; j < lim; j += stride) {
+            const v = Math.abs(ch[j])
+            if (v > m) m = v
+          }
+          col[i] = m
+        }
+        a[k] = col
+      }
+      setAmps(a)
       setReady(true)
     })()
     return () => {
@@ -111,6 +234,7 @@ function StudioPlayer({ stems, name, onClose }) {
     if (s.solo) return k === s.solo ? s.gains[k] : 0
     return s.muted[k] ? 0 : s.gains[k]
   }
+  const effGains = Object.fromEntries(ORDER.map(k => [k, effGain(k, { gains, muted, solo })]))
 
   function applyGains(next) {
     for (const k in gainNodesRef.current) {
@@ -166,10 +290,10 @@ function StudioPlayer({ stems, name, onClose }) {
     setPlaying(false)
   }
 
-  function seek(t) {
+  function seekPlay(t) {
     posRef.current = t
     setPos(t)
-    if (playing) play(t)
+    play(t)  // click on the waveform starts playback from there
   }
 
   function setGain(k, v) {
@@ -195,7 +319,9 @@ function StudioPlayer({ stems, name, onClose }) {
       const tracks = ORDER.filter(k => stems[k] && effGain(k) > 0)
         .map(k => ({ file: stems[k], gain: effGain(k) }))
       if (!tracks.length) throw new Error('everything is muted')
-      const data = await postJSON('/studio/export', { name, tracks })
+      const body = { name, tracks }
+      if (sel) { body.start = sel[0]; body.end = sel[1] }
+      const data = await postJSON('/studio/export', body)
       setExpStatus({ text: 'Done!' })
       setExpResult(data)
     } catch (e) {
@@ -223,17 +349,20 @@ function StudioPlayer({ stems, name, onClose }) {
             </svg>
           )}
         </button>
-        <div className="sbar" onClick={e => {
-          const r = e.currentTarget.getBoundingClientRect()
-          seek(((e.clientX - r.left) / r.width) * duration)
-        }}>
-          <div className="sbar-fill" style={{ width: `${duration ? (pos / duration) * 100 : 0}%` }} />
+        <div style={{ flex: 1, minWidth: 0 }}>
+          <StudioWave amps={amps} effGains={effGains} pos={pos} duration={duration}
+            sel={sel} onSeekPlay={seekPlay} onSelect={setSel} />
+          <div className="wave-hint">
+            {sel
+              ? `selected ${fmtTime(sel[0])} – ${fmtTime(sel[1])} — export will keep only this part (click to clear)`
+              : 'click to play from there · drag to select the part to export'}
+          </div>
         </div>
         <span className="wave-time">{fmtTime(pos)} / {fmtTime(duration)}</span>
       </div>
 
       {ORDER.filter(k => stems[k]).map(k => (
-        <div key={k} className={'track-row' + (effGain(k) === 0 ? ' off' : '')}>
+        <div key={k} className={'track-row' + (effGains[k] === 0 ? ' off' : '')}>
           <span className="track-name">{STEM_NAMES[k]}</span>
           <button className={'chip tiny' + (muted[k] ? ' active' : '')} onClick={() => toggleMute(k)}>M</button>
           <button className={'chip tiny' + (solo === k ? ' active' : '')} onClick={() => toggleSolo(k)}>S</button>
@@ -244,7 +373,8 @@ function StudioPlayer({ stems, name, onClose }) {
       ))}
 
       <div style={{ marginTop: 20, display: 'flex', justifyContent: 'center' }}>
-        <LiquidMetalButton label="Export mix" width={160} onClick={exportMix} disabled={expBusy} />
+        <LiquidMetalButton label={sel ? 'Export selection' : 'Export mix'} width={180}
+          onClick={exportMix} disabled={expBusy} />
       </div>
       <Status {...(expStatus || {})} />
       {expResult && (

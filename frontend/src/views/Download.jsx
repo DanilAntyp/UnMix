@@ -5,7 +5,7 @@ import { Waveform } from '../Waveform'
 import { ConvertControls } from '../ConvertControls'
 import { LiquidMetalButton } from '../LiquidMetalButton'
 
-export function DownloadView({ onExtract, onKaraoke }) {
+export function DownloadView({ onExtract, onStudio, onKaraoke }) {
   const [url, setUrl] = useState('')
   const [info, setInfo] = useState(null)
   const [status, setStatus] = useState(null) // {busy, text, pct, error}
@@ -118,6 +118,9 @@ export function DownloadView({ onExtract, onKaraoke }) {
               <span className="media-actions">
                 <button className="chip" onClick={() => onExtract(result.file, result.title)}>
                   Extract sound →
+                </button>
+                <button className="chip" onClick={() => onStudio(result.file)}>
+                  Open in Studio →
                 </button>
                 <button className="chip grad" onClick={() => onKaraoke(result.file)}>
                   Make karaoke →

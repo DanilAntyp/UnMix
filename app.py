@@ -20,7 +20,6 @@ from flask import Flask, request, send_from_directory, jsonify
 import separator
 from separator import get_separator, sep_lock
 import karaoke
-import mashup
 
 APP_DIR = Path(__file__).parent
 OUT_DIR = APP_DIR / "separated"
@@ -35,7 +34,6 @@ PROGRESS = {}  # yt-dlp download progress, keyed by client-chosen id
 app = Flask(__name__)
 app.config["MAX_CONTENT_LENGTH"] = 500 * 1024 * 1024
 app.register_blueprint(karaoke.bp)
-app.register_blueprint(mashup.bp)
 MIDI_DIR = APP_DIR / "midi"
 MIDI_DIR.mkdir(exist_ok=True)
 
@@ -754,8 +752,7 @@ CONV_FORMATS = {
 }
 
 
-SERVED_DIRS = {"/downloads/": DL_DIR, "/separated/": OUT_DIR, "/converted/": CONV_DIR,
-               "/mashups/": mashup.MASHUP_DIR}
+SERVED_DIRS = {"/downloads/": DL_DIR, "/separated/": OUT_DIR, "/converted/": CONV_DIR}
 
 
 def resolve_served(url_path: str):
@@ -854,10 +851,19 @@ def studio_export():
         filters.append(f"[{i}:a]volume={gain:.3f}[a{i}]")
         labels.append(f"[a{i}]")
     name = re.sub(r"[^\w\s.-]", "", data.get("name") or "mix").strip() or "mix"
-    out_name = f"{name}_custom_mix.mp3"
+    try:
+        start = float(data.get("start")) if data.get("start") is not None else None
+        end = float(data.get("end")) if data.get("end") is not None else None
+    except (TypeError, ValueError):
+        return jsonify(error="bad trim range"), 400
+    cut = start is not None and end is not None and end > (start or 0)
+    out_name = f"{name}_custom_mix{'_cut' if cut else ''}.mp3"
     out_path = CONV_DIR / out_name
     fc = ";".join(filters) + f";{''.join(labels)}amix=inputs={len(tracks)}:normalize=0[out]"
-    cmd += ["-filter_complex", fc, "-map", "[out]", "-c:a", "libmp3lame", "-b:a", "320k", str(out_path)]
+    cmd += ["-filter_complex", fc, "-map", "[out]"]
+    if cut:
+        cmd += ["-ss", f"{max(0.0, start):.3f}", "-to", f"{end:.3f}"]
+    cmd += ["-c:a", "libmp3lame", "-b:a", "320k", str(out_path)]
     r = subprocess.run(cmd, capture_output=True, text=True)
     if r.returncode != 0:
         return jsonify(error="ffmpeg failed: " + r.stderr[-300:]), 500
