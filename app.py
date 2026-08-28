@@ -20,6 +20,7 @@ from flask import Flask, request, send_from_directory, jsonify
 import separator
 from separator import get_separator, sep_lock
 import karaoke
+import mashup
 
 APP_DIR = Path(__file__).parent
 OUT_DIR = APP_DIR / "separated"
@@ -34,6 +35,9 @@ PROGRESS = {}  # yt-dlp download progress, keyed by client-chosen id
 app = Flask(__name__)
 app.config["MAX_CONTENT_LENGTH"] = 500 * 1024 * 1024
 app.register_blueprint(karaoke.bp)
+app.register_blueprint(mashup.bp)
+MIDI_DIR = APP_DIR / "midi"
+MIDI_DIR.mkdir(exist_ok=True)
 
 
 MODEL_STEMS = {
@@ -750,7 +754,8 @@ CONV_FORMATS = {
 }
 
 
-SERVED_DIRS = {"/downloads/": DL_DIR, "/separated/": OUT_DIR, "/converted/": CONV_DIR}
+SERVED_DIRS = {"/downloads/": DL_DIR, "/separated/": OUT_DIR, "/converted/": CONV_DIR,
+               "/mashups/": mashup.MASHUP_DIR}
 
 
 def resolve_served(url_path: str):
@@ -811,6 +816,73 @@ def convert():
 @app.get("/converted/<path:name>")
 def get_converted(name):
     return send_from_directory(CONV_DIR, name)
+
+
+@app.post("/upload")
+def upload():
+    """Store an uploaded song server-side so other tools can reference it."""
+    f = request.files.get("audio")
+    if f is None or not f.filename:
+        return jsonify(error="no file uploaded"), 400
+    name = Path(f.filename).name
+    f.save(DL_DIR / name)
+    return jsonify(file=f"/downloads/{name}", name=name)
+
+
+@app.get("/files")
+def list_files():
+    exts = {".mp3", ".wav", ".flac", ".m4a", ".ogg", ".aac"}
+    files = sorted((p for p in DL_DIR.iterdir() if p.suffix.lower() in exts),
+                   key=lambda p: p.stat().st_mtime, reverse=True)
+    return jsonify(files=[{"name": p.name, "file": f"/downloads/{p.name}"} for p in files[:60]])
+
+
+@app.post("/studio/export")
+def studio_export():
+    """Mix stem files with per-track gains into one file."""
+    data = request.get_json(silent=True) or {}
+    tracks = data.get("tracks") or []
+    if not tracks:
+        return jsonify(error="no tracks"), 400
+    cmd, filters, labels = ["ffmpeg", "-y"], [], []
+    for i, t in enumerate(tracks):
+        p = resolve_served(t.get("file", ""))
+        if p is None:
+            return jsonify(error=f"file not found: {t.get('file')}"), 404
+        cmd += ["-i", str(p)]
+        gain = max(0.0, min(3.0, float(t.get("gain", 1.0))))
+        filters.append(f"[{i}:a]volume={gain:.3f}[a{i}]")
+        labels.append(f"[a{i}]")
+    name = re.sub(r"[^\w\s.-]", "", data.get("name") or "mix").strip() or "mix"
+    out_name = f"{name}_custom_mix.mp3"
+    out_path = CONV_DIR / out_name
+    fc = ";".join(filters) + f";{''.join(labels)}amix=inputs={len(tracks)}:normalize=0[out]"
+    cmd += ["-filter_complex", fc, "-map", "[out]", "-c:a", "libmp3lame", "-b:a", "320k", str(out_path)]
+    r = subprocess.run(cmd, capture_output=True, text=True)
+    if r.returncode != 0:
+        return jsonify(error="ffmpeg failed: " + r.stderr[-300:]), 500
+    return jsonify(file=f"/converted/{out_name}", name=out_name)
+
+
+@app.post("/midi")
+def audio_to_midi():
+    data = request.get_json(silent=True) or {}
+    path = resolve_served(data.get("server_file", ""))
+    if path is None:
+        return jsonify(error="file not found"), 404
+    try:
+        import midi_tool
+        notes = midi_tool.transcribe(path)
+        out_name = f"{path.stem}.mid"
+        midi_tool.write_midi(notes, MIDI_DIR / out_name)
+        return jsonify(file=f"/midi/{out_name}", notes=notes[:4000], count=len(notes))
+    except Exception as e:
+        return jsonify(error=str(e)), 500
+
+
+@app.get("/midi/<path:name>")
+def get_midi(name):
+    return send_from_directory(MIDI_DIR, name, as_attachment=True)
 
 
 ANALYSIS_CACHE = {}

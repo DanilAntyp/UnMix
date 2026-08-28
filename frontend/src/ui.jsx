@@ -60,6 +60,23 @@ export const IconNote = p => (
     <path d="M9.6 18V6.5L19.6 4v12" />
   </svg>
 )
+export const IconSliders = p => (
+  <svg {...I(p)}>
+    <path d="M5 4v6m0 4v6m7-16v2m0 4v10m7-16v10m0 4v2" />
+    <circle cx="5" cy="12" r="2" /><circle cx="12" cy="8" r="2" /><circle cx="19" cy="16" r="2" />
+  </svg>
+)
+export const IconBlend = p => (
+  <svg {...I(p)}>
+    <circle cx="9" cy="12" r="5.5" /><circle cx="15" cy="12" r="5.5" />
+  </svg>
+)
+export const IconPiano = p => (
+  <svg {...I(p)}>
+    <rect x="3" y="5" width="18" height="14" rx="2" />
+    <path d="M8 12v7m4-7v7m4-7v7M8 5v7h8V5" />
+  </svg>
+)
 
 /* ---------- drop zone ---------- */
 export function DropZone({ onFile, hint, icon, accept }) {
