@@ -108,20 +108,74 @@ def _slice(src: Path, start: float, dur: float, out: Path):
 SWAP_FRAC = {"automix": 0.5, "neural": 0.5, "bassswap": 0.5, "acapella": 0.4}
 
 
-def _phrase_snap(t, sections, bar_phase, bar_len, phrase_bars=4):
-    """Snap t to the phrase grid: phrases count in groups of `phrase_bars` bars,
-    anchored at the (bar-snapped) start of the section containing t. Music
-    changes on phrase boundaries, so entries/exits land 'in the right place'."""
-    anchor = bar_phase
+def _load_grid(analysis, path: Path, job=None, label="") -> dict:
+    """Real downbeats from madmom when possible, comb-grid fallback otherwise."""
+    try:
+        if job is not None:
+            job["stage"] = f"Tracking beats{label} (neural)..."
+        return analysis.madmom_grid(path)
+    except Exception:
+        g = dict(analysis.beat_grid(path))
+        g["downbeats"] = None
+        return g
+
+
+def _grid_scaled(grid: dict, ratio: float) -> dict:
+    """Grid of the tempo-stretched file: atempo=ratio maps t -> t/ratio."""
+    if abs(ratio - 1) < 0.005:
+        return grid
+    g = {"bpm": round(grid["bpm"] * ratio, 2), "beat_len": grid["beat_len"] / ratio,
+         "bar_len": grid["bar_len"] / ratio, "bar": grid["bar"] / ratio}
+    g["downbeats"] = ([round(t / ratio, 3) for t in grid["downbeats"]]
+                      if grid.get("downbeats") else None)
+    return g
+
+
+def _snap_grid(t, grid):
+    """Nearest downbeat (real, per-beat) or uniform-grid fallback."""
+    db = grid.get("downbeats")
+    if db:
+        arr = np.asarray(db)
+        return float(arr[np.argmin(np.abs(arr - t))])
+    k = round((t - grid["bar"]) / grid["bar_len"])
+    return max(0.0, grid["bar"] + k * grid["bar_len"])
+
+
+def _phrase_candidates(t, sections, grid, phrase_bars=4):
+    """Phrase boundaries near t: every `phrase_bars`-th downbeat, anchored at
+    the downbeat nearest to the start of the section containing t."""
+    db = grid.get("downbeats")
+    if db:
+        arr = np.asarray(db)
+        anchor_i = 0
+        for s in sections or []:
+            if s["start"] <= t + 1e-6:
+                anchor_i = int(np.argmin(np.abs(arr - s["start"])))
+            else:
+                break
+        return arr[anchor_i % phrase_bars::phrase_bars]
+    # uniform fallback
+    anchor = grid["bar"]
     for s in sections or []:
         if s["start"] <= t + 1e-6:
-            k = round((s["start"] - bar_phase) / bar_len)
-            anchor = bar_phase + k * bar_len
+            k = round((s["start"] - grid["bar"]) / grid["bar_len"])
+            anchor = grid["bar"] + k * grid["bar_len"]
         else:
             break
-    phrase = phrase_bars * bar_len
-    k = round((t - anchor) / phrase)
-    return max(0.0, anchor + k * phrase)
+    phrase = phrase_bars * grid["bar_len"]
+    lo = anchor - phrase * 40
+    return np.array([lo + i * phrase for i in range(90)])
+
+
+def _phrase_snap(t, sections, grid, phrase_bars=4):
+    cands = _phrase_candidates(t, sections, grid, phrase_bars)
+    return float(cands[np.argmin(np.abs(cands - t))])
+
+
+def _phrase_prev(t, sections, grid, phrase_bars=4):
+    cands = _phrase_candidates(t, sections, grid, phrase_bars)
+    below = cands[cands < t - 1e-3]
+    return float(below[-1]) if len(below) else t - phrase_bars * grid["bar_len"]
 
 
 def _find_drop(sections, limit=120.0):
@@ -339,9 +393,9 @@ def _prep(job, a_path, b_path, beats, need_stretch):
     """Shared analysis: grids, loudness, matched/plain B, entry points."""
     import analysis
     ctx = {}
-    job["stage"] = "Reading the beat grids..."
-    grid_a = analysis.beat_grid(a_path)
-    grid_b = analysis.beat_grid(b_path)
+    grid_a = _load_grid(analysis, a_path, job, " of track A")
+    grid_b = _load_grid(analysis, b_path, job, " of track B")
+    ctx["grid_b_orig"] = grid_b
     job["a_facts"] = analysis.analyze(a_path)
     job["b_facts"] = analysis.analyze(b_path)
     ctx["bpm"] = grid_a["bpm"] or 120
@@ -371,11 +425,10 @@ def _prep(job, a_path, b_path, beats, need_stretch):
         stretching = stretched and abs(ratio - 1) > 0.005
         af = (f"atempo={ratio:.4f}," if stretching else "") + f"volume={gain_b:.3f}"
         _run(["ffmpeg", "-y", "-i", str(b_path), "-af", af, "-ac", "2", "-ar", "44100", str(out)])
-        grid = analysis.beat_grid(out)
+        grid = _grid_scaled(ctx["grid_b_orig"], ratio if stretching else 1.0)
 
         def snap(t):
-            k = round((t - grid["bar"]) / grid["bar_len"])
-            return max(0.0, grid["bar"] + k * grid["bar_len"])
+            return _snap_grid(t, grid)
 
         if override_orig is not None:
             # user-picked entry point, given on B's ORIGINAL timeline
@@ -420,14 +473,12 @@ def _entry_for(bvar, style, T):
 
 
 def _manual_cut(ctx, a_path, style, T, wanted):
-    """Snap a user-picked exit point to the bar grid, keeping it renderable."""
+    """Snap a user-picked exit point to the nearest real downbeat."""
     dur_a = _duration(a_path)
     target = dur_a - (1.0 if style in HARD_STYLES else T + 1.0)
-    grid_a, bar = ctx["grid_a"], ctx["bar"]
     wanted = min(max(wanted, 10.0), target)
-    k = round((wanted - grid_a["bar"]) / bar)
     ctx["cut_reason"] = "manual"
-    return max(10.0, min(grid_a["bar"] + k * bar, target))
+    return max(10.0, min(_snap_grid(wanted, ctx["grid_a"]), target))
 
 
 def _pick_cut(ctx, a_path, style, T):
@@ -439,39 +490,35 @@ def _pick_cut(ctx, a_path, style, T):
     grid_a, bar = ctx["grid_a"], ctx["bar"]
     look = min(T, 8.0)
 
-    def snap(t):
-        k = round((t - grid_a["bar"]) / bar)
-        return grid_a["bar"] + k * bar
-
     def alive(t):
         return _mean_rms(ctx["r_a"], ctx["win_a"], t, t + look) >= 0.45 * ctx["med_a"]
 
     # structure-aware: hand over at the END of the last high-energy section
-    # (right after the final chorus/drop), snapped to the PHRASE grid
+    # (right after the final chorus/drop), snapped to the PHRASE grid built
+    # from REAL downbeats
     try:
         secs = analysis.detect_sections(a_path)
     except Exception:
         secs = []
     ctx["a_sections"] = secs
-    phrase = 4 * bar
     for s in reversed(secs):
         if s["energy"] < 0.55 or s["end"] < 20:
             continue
-        cut = _phrase_snap(min(s["end"], target), secs, grid_a["bar"], bar)
+        cut = _phrase_snap(min(s["end"], target), secs, grid_a)
         while cut > target:
-            cut -= phrase
+            cut = _phrase_prev(cut, secs, grid_a)
         while cut > s["start"] + bar and not alive(cut):
-            cut -= phrase
+            cut = _phrase_prev(cut, secs, grid_a)
         if cut > 20 and alive(cut):
             ctx["cut_reason"] = "end of last high-energy phrase"
             return cut
 
     # fallback: latest loud phrase boundary before the target
-    cut = _phrase_snap(target, secs, grid_a["bar"], bar)
+    cut = _phrase_snap(target, secs, grid_a)
     while cut > target:
-        cut -= phrase
+        cut = _phrase_prev(cut, secs, grid_a)
     while cut > 20 and not alive(cut):
-        cut -= phrase
+        cut = _phrase_prev(cut, secs, grid_a)
     ctx["cut_reason"] = "loudness fallback"
     return cut
 
@@ -632,8 +679,8 @@ def dj_inspect():
         return jsonify(error="pick both tracks first"), 400
     beats = int(data.get("beats") or 32)
     try:
-        grid_a = analysis.beat_grid(a)
-        grid_b = analysis.beat_grid(b)
+        grid_a = _load_grid(analysis, a)
+        grid_b = _load_grid(analysis, b)
         bpm = grid_a["bpm"] or 120
         T = max(2.0, beats * 60.0 / bpm)
         r_a, win_a = analysis.rms_profile(a)
@@ -642,15 +689,14 @@ def dj_inspect():
         cut = _pick_cut(ctx, a, "automix", T)
 
         secs_b = analysis.detect_sections(b)
-
-        def snap_b(t):
-            k = round((t - grid_b["bar"]) / grid_b["bar_len"])
-            return max(0.0, grid_b["bar"] + k * grid_b["bar_len"])
-
         drop = _find_drop(secs_b)
+        ratio = 1.0
+        if grid_a["bpm"] and grid_b["bpm"]:
+            ratio = _fold_ratio(grid_a["bpm"] / grid_b["bpm"])
         if drop is not None:
             # drop-to-drop default: enter early so B's drop lands on the swap
-            b_start = snap_b(max(0.0, snap_b(drop) - 0.5 * T))
+            # (offset converted to B's original timeline)
+            b_start = _snap_grid(max(0.0, _snap_grid(drop, grid_b) - 0.5 * T * ratio), grid_b)
         else:
             b_start = grid_b["bar"]
 
@@ -658,10 +704,12 @@ def dj_inspect():
             T=round(T, 2),
             a={"duration": round(_duration(a), 2), "bpm": grid_a["bpm"],
                "bar_phase": round(grid_a["bar"], 3), "bar_len": round(grid_a["bar_len"], 4),
+               "downbeats": grid_a.get("downbeats"),
                "sections": ctx.get("a_sections", analysis.detect_sections(a)),
                "cut": round(cut, 2), "cut_reason": ctx.get("cut_reason")},
             b={"duration": round(_duration(b), 2), "bpm": grid_b["bpm"],
                "bar_phase": round(grid_b["bar"], 3), "bar_len": round(grid_b["bar_len"], 4),
+               "downbeats": grid_b.get("downbeats"),
                "sections": secs_b, "b_start": round(b_start, 2)},
         )
     except Exception as e:

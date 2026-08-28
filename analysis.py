@@ -142,6 +142,30 @@ def _beat_grid_impl(path: Path, max_seconds: int) -> dict:
             "beat_len": 60 / bpm, "bar_len": 4 * 60 / bpm}
 
 
+def madmom_grid(path: Path) -> dict:
+    """Neural beat/downbeat tracking (madmom RNN + DBN decoder). Returns real,
+    per-beat times instead of a rigid phase+period grid — this is what makes
+    transitions land on the actual downbeat, not an estimated one."""
+    return _cached("madmom", path, lambda: _madmom_grid_impl(path))
+
+
+def _madmom_grid_impl(path: Path) -> dict:
+    from madmom.features.downbeats import RNNDownBeatProcessor, DBNDownBeatTrackingProcessor
+    act = RNNDownBeatProcessor()(str(path))
+    beats = DBNDownBeatTrackingProcessor(beats_per_bar=[4], fps=100)(act)
+    times = beats[:, 0]
+    downbeats = times[beats[:, 1] == 1]
+    ibi = np.diff(times)
+    bpm = round(60.0 / float(np.median(ibi)), 1) if len(ibi) else 0.0
+    if len(downbeats) > 2:
+        bar_len = float(np.median(np.diff(downbeats)))
+    else:
+        bar_len = 4 * 60 / max(bpm, 1)
+    return {"bpm": bpm, "beat_len": 60 / max(bpm, 1), "bar_len": bar_len,
+            "downbeats": [round(float(t), 3) for t in downbeats],
+            "bar": float(downbeats[0]) if len(downbeats) else 0.0}
+
+
 def detect_sections(path: Path, max_seconds: int = 600):
     return _cached("sections", path, lambda: _detect_sections_impl(path, max_seconds), max_seconds)
 

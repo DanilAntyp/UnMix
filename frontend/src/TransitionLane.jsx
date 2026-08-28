@@ -13,6 +13,14 @@ export function TransitionLane({ src, info, marker, onMarker, label, note }) {
   const duration = info.duration
 
   function snap(t) {
+    if (info.downbeats && info.downbeats.length) {
+      let best = info.downbeats[0], bd = Infinity
+      for (const d of info.downbeats) {
+        const diff = Math.abs(d - t)
+        if (diff < bd) { bd = diff; best = d }
+      }
+      return best
+    }
     const k = Math.round((t - info.bar_phase) / info.bar_len)
     return Math.min(Math.max(info.bar_phase + k * info.bar_len, 0), duration - 1)
   }
