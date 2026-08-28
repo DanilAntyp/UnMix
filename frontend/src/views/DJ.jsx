@@ -3,6 +3,7 @@ import { postForm, postJSON } from '../api'
 import { DropZone, Status, MediaCard, PanelHead, TrackFacts, IconNote } from '../ui'
 import { LiquidMetalButton } from '../LiquidMetalButton'
 import { Waveform, fmtTime } from '../Waveform'
+import { TransitionLane } from '../TransitionLane'
 
 const STYLES = [
   { id: 'automix', name: 'AutoMix', desc: 'smooth Apple Music-style blend — best for pop, house, anything melodic' },
@@ -60,11 +61,31 @@ export function DJView() {
   const [result, setResult] = useState(null)
   const [previews, setPreviews] = useState(null)
   const [busy, setBusy] = useState(false)
+  const [inspect, setInspect] = useState(null)
+  const [cutSec, setCutSec] = useState(null)
+  const [bStartSec, setBStartSec] = useState(null)
   const pollRef = useRef(null)
 
   const refresh = () => fetch('/files').then(r => r.json()).then(d => setFiles(d.files || [])).catch(() => {})
   useEffect(() => { refresh() }, [])
   useEffect(() => () => clearTimeout(pollRef.current), [])
+
+  useEffect(() => {
+    setInspect(null); setCutSec(null); setBStartSec(null)
+    if (!a || !b) return
+    let cancelled = false
+    setStatus({ busy: true, text: 'Analyzing both tracks…' })
+    postJSON('/dj/inspect', { a_file: decodeURI(a), b_file: decodeURI(b), beats })
+      .then(d => {
+        if (cancelled) return
+        setInspect(d)
+        setCutSec(d.a.cut)
+        setBStartSec(d.b.b_start)
+        setStatus(null)
+      })
+      .catch(e => { if (!cancelled) setStatus({ text: 'Error: ' + e.message, error: true }) })
+    return () => { cancelled = true }
+  }, [a, b, beats])
 
   async function start(preview = false) {
     if (!a || !b || busy) return
@@ -73,6 +94,8 @@ export function DJView() {
     try {
       const body = { a_file: decodeURI(a), b_file: decodeURI(b), style, beats }
       if (preview) body.preview = true
+      if (cutSec != null) body.cut = cutSec
+      if (bStartSec != null) body.b_start = bStartSec
       const data = await postJSON('/dj/start', body)
       poll(data.job)
     } catch (e) {
@@ -124,6 +147,35 @@ export function DJView() {
         <DeckSlot label="Deck B" hint="comes in after" value={b} onChange={setB}
           files={files} refresh={refresh} />
       </div>
+
+      {inspect && (
+        <div className="editor glass-soft">
+          <TransitionLane
+            src={a} info={inspect.a} marker={cutSec} onMarker={setCutSec}
+            label="Deck A — exit point"
+            note={cutSec === inspect.a.cut
+              ? `auto: ${inspect.a.cut_reason || 'proposed'}`
+              : 'manual — drag to adjust'} />
+          {cutSec !== inspect.a.cut && (
+            <button className="chip tiny lane-reset" onClick={() => setCutSec(inspect.a.cut)}>
+              reset to auto
+            </button>
+          )}
+          <TransitionLane
+            src={b} info={inspect.b} marker={bStartSec} onMarker={setBStartSec}
+            label="Deck B — entry point"
+            note={bStartSec === inspect.b.b_start ? 'auto: first full-energy section' : 'manual — drag to adjust'} />
+          {bStartSec !== inspect.b.b_start && (
+            <button className="chip tiny lane-reset" onClick={() => setBStartSec(inspect.b.b_start)}>
+              reset to auto
+            </button>
+          )}
+          <div className="wave-hint" style={{ marginTop: 6 }}>
+            brighter waveform = higher-energy section · vertical lines = detected section boundaries ·
+            markers snap to bars
+          </div>
+        </div>
+      )}
 
       <div className="setting">
         <label>Transition:</label>

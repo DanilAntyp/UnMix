@@ -328,15 +328,21 @@ def _prep(job, a_path, b_path, beats, need_stretch):
     ctx["ratio"] = ratio
     job["stretch"] = round(ratio, 4)
 
-    def make_b(stretched):
+    def make_b(stretched, override_orig=None):
         out = work / ("b_matched.wav" if stretched else "b_plain.wav")
-        af = (f"atempo={ratio:.4f}," if stretched and abs(ratio - 1) > 0.005 else "") + f"volume={gain_b:.3f}"
+        stretching = stretched and abs(ratio - 1) > 0.005
+        af = (f"atempo={ratio:.4f}," if stretching else "") + f"volume={gain_b:.3f}"
         _run(["ffmpeg", "-y", "-i", str(b_path), "-af", af, "-ac", "2", "-ar", "44100", str(out)])
         grid = analysis.beat_grid(out)
 
         def snap(t):
             k = round((t - grid["bar"]) / grid["bar_len"])
             return max(0.0, grid["bar"] + k * grid["bar_len"])
+
+        if override_orig is not None:
+            # user-picked entry point, given on B's ORIGINAL timeline
+            t_local = float(override_orig) / ratio if stretching else float(override_orig)
+            return {"file": out, "b_start": snap(t_local)}
 
         # structure-aware entry: the first section that plays at full energy
         b_start = None
@@ -364,6 +370,17 @@ def _prep(job, a_path, b_path, beats, need_stretch):
         return {"file": out, "b_start": b_start}
     ctx["make_b"] = make_b
     return ctx
+
+
+def _manual_cut(ctx, a_path, style, T, wanted):
+    """Snap a user-picked exit point to the bar grid, keeping it renderable."""
+    dur_a = _duration(a_path)
+    target = dur_a - (1.0 if style in HARD_STYLES else T + 1.0)
+    grid_a, bar = ctx["grid_a"], ctx["bar"]
+    wanted = min(max(wanted, 10.0), target)
+    k = round((wanted - grid_a["bar"]) / bar)
+    ctx["cut_reason"] = "manual"
+    return max(10.0, min(grid_a["bar"] + k * bar, target))
 
 
 def _pick_cut(ctx, a_path, style, T):
@@ -427,11 +444,15 @@ def process_job(job_id, a_path, b_path, opts):
             style = "crossfade"
             T = min(T, 4 * bar)
 
-        bvar = ctx["make_b"](stretched=style not in HARD_STYLES)
+        bvar = ctx["make_b"](stretched=style not in HARD_STYLES,
+                             override_orig=opts.get("b_start"))
         b_matched, b_start = bvar["file"], bvar["b_start"]
         job["b_skip"] = round(b_start, 2)
 
-        cut = _pick_cut(ctx, a_path, style, T)
+        if opts.get("cut") is not None:
+            cut = _manual_cut(ctx, a_path, style, T, float(opts["cut"]))
+        else:
+            cut = _pick_cut(ctx, a_path, style, T)
 
         sa_cut = sb = None
         delay_s = cut
@@ -443,7 +464,7 @@ def process_job(job_id, a_path, b_path, opts):
 
             r_v, win_v = analysis.rms_profile(sa["vocals"])
             med_v = _active_median(r_v)
-            if med_v > 1e-4 and style != "acapella":
+            if med_v > 1e-4 and style != "acapella" and opts.get("cut") is None:
                 cand = cut
                 for _ in range(8):
                     local = cand - win_start
@@ -501,10 +522,14 @@ def _preview_job(job, a_path, b_path, opts):
     ctx = _prep(job, a_path, b_path, beats, need_stretch=True)
     T, bar, bpm, work = ctx["T"], ctx["bar"], ctx["bpm"], ctx["work"]
 
-    b_soft = ctx["make_b"](stretched=True)
-    b_hard = ctx["make_b"](stretched=False) if any(s in HARD_STYLES for s in styles) else b_soft
+    b_soft = ctx["make_b"](stretched=True, override_orig=opts.get("b_start"))
+    b_hard = (ctx["make_b"](stretched=False, override_orig=opts.get("b_start"))
+              if any(s in HARD_STYLES for s in styles) else b_soft)
 
-    cut = _pick_cut(ctx, a_path, "automix", T)
+    if opts.get("cut") is not None:
+        cut = _manual_cut(ctx, a_path, "automix", T, float(opts["cut"]))
+    else:
+        cut = _pick_cut(ctx, a_path, "automix", T)
     job["transition_at"] = round(cut, 2)
 
     PRE = 12.0
@@ -538,6 +563,53 @@ def _preview_job(job, a_path, b_path, opts):
             previews.append({"style": style, "error": str(e)})
     job["previews"] = previews
     job["stage"] = "Done! Transition hits at 0:12 in every clip."
+
+
+@bp.post("/dj/inspect")
+def dj_inspect():
+    """Analysis for the transition editor: grids, sections and proposed points
+    for both tracks, all on the ORIGINAL files' timelines."""
+    import analysis
+    data = request.get_json(silent=True) or {}
+    a = _resolve(data.get("a_file", ""))
+    b = _resolve(data.get("b_file", ""))
+    if a is None or b is None:
+        return jsonify(error="pick both tracks first"), 400
+    beats = int(data.get("beats") or 32)
+    try:
+        grid_a = analysis.beat_grid(a)
+        grid_b = analysis.beat_grid(b)
+        bpm = grid_a["bpm"] or 120
+        T = max(2.0, beats * 60.0 / bpm)
+        r_a, win_a = analysis.rms_profile(a)
+        ctx = {"grid_a": grid_a, "bar": grid_a["bar_len"],
+               "r_a": r_a, "win_a": win_a, "med_a": _active_median(r_a)}
+        cut = _pick_cut(ctx, a, "automix", T)
+
+        secs_b = analysis.detect_sections(b)
+        b_start = None
+        for s in secs_b:
+            if s["start"] > 90:
+                break
+            if s["energy"] >= 0.7:
+                k = round((s["start"] - grid_b["bar"]) / grid_b["bar_len"])
+                b_start = max(0.0, grid_b["bar"] + k * grid_b["bar_len"])
+                break
+        if b_start is None:
+            b_start = grid_b["bar"]
+
+        return jsonify(
+            T=round(T, 2),
+            a={"duration": round(_duration(a), 2), "bpm": grid_a["bpm"],
+               "bar_phase": round(grid_a["bar"], 3), "bar_len": round(grid_a["bar_len"], 4),
+               "sections": ctx.get("a_sections", analysis.detect_sections(a)),
+               "cut": round(cut, 2), "cut_reason": ctx.get("cut_reason")},
+            b={"duration": round(_duration(b), 2), "bpm": grid_b["bpm"],
+               "bar_phase": round(grid_b["bar"], 3), "bar_len": round(grid_b["bar_len"], 4),
+               "sections": secs_b, "b_start": round(b_start, 2)},
+        )
+    except Exception as e:
+        return jsonify(error=str(e)), 500
 
 
 @bp.post("/dj/start")

@@ -442,6 +442,15 @@ video { width: 100%; border-radius: 10px; background: #000; }
   margin-top: 10px; font-size: 0.85rem; color: #d1d1d6;
   display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
 }
+.editor { margin-top: 16px; padding: 16px; }
+.lane { margin-bottom: 14px; }
+.lane-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 6px; }
+.lane-label { font-weight: 600; font-size: 0.88rem; }
+.lane-note { color: var(--muted); font-weight: 400; font-size: 0.78rem; margin-left: 8px; }
+.lane-actions { display: flex; align-items: center; gap: 10px; }
+.lane-time { font-size: 0.8rem; color: var(--muted); font-variant-numeric: tabular-nums; }
+.lane-reset { margin: -6px 0 12px; }
+
 .compat {
   margin-top: 16px; padding: 11px 16px; border-radius: 12px; font-size: 0.87rem;
   background: rgba(255, 255, 255, 0.05); border: 1px solid rgba(255, 255, 255, 0.08);
