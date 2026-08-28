@@ -125,6 +125,7 @@ export function DJView() {
         text: `Done! Transition at ${fmtTime(j.transition_at)}` +
           (j.b_skip > 0.5 ? ` · B enters from ${fmtTime(j.b_skip)}` : '') +
           (j.entry_plan && j.entry_plan !== 'manual' ? ` (${j.entry_plan})` : '') +
+          (j.key_action ? ` · ${j.key_action}` : '') +
           (Math.abs(j.stretch - 1) > 0.005 ? ` · B stretched ×${j.stretch}` : '') +
           (j.fallback ? ` · fell back to ${j.fallback}` : ''),
       })

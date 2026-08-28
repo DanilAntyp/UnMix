@@ -196,7 +196,7 @@ def _find_drop(sections, limit=120.0):
     return None
 
 
-def _stem_envelopes(style: str, T: float, bar: float):
+def _stem_envelopes(style: str, T: float, bar: float, clash: bool = False):
     def fade(kind, st, d):
         st = max(0.0, min(st, T - 0.1))
         d = max(0.1, min(d, T - st))
@@ -206,12 +206,14 @@ def _stem_envelopes(style: str, T: float, bar: float):
         swap = T / 2
         a = {
             "vocals": fade("out", 0, bar),
-            "other": fade("out", bar, 2 * bar),
+            "other": fade("out", bar, min(2 * bar, swap - bar) if clash else 2 * bar),
             "bass": fade("out", swap - 0.15, 0.3),
             "drums": fade("out", swap, bar),
         }
         b = {
-            "other": fade("in", bar, 2 * bar),
+            # keys clash -> B's melodic layer waits for the swap so the two
+            # harmonies never sound together; only rhythm crosses over
+            "other": fade("in", swap if clash else bar, bar if clash else 2 * bar),
             "drums": f"volume=0:enable='lt(t,{swap:.3f})'",
             "bass": fade("in", swap - 0.05, 0.25),
             "vocals": fade("in", swap + bar, 2 * bar),
@@ -241,8 +243,8 @@ def _stem_envelopes(style: str, T: float, bar: float):
         b = {
             "drums": fade("in", 0, 0.4 * T),
             "bass": fade("in", 0.5 * T - 0.05, 0.25),
-            "other": fade("in", 0.15 * T, 0.45 * T),
-            "vocals": fade("in", 0.3 * T, 0.5 * T),
+            "other": fade("in", 0.5 * T if clash else 0.15 * T, 0.45 * T),
+            "vocals": fade("in", 0.5 * T if clash else 0.3 * T, 0.5 * T),
         }
     else:  # bassswap
         a = {
@@ -252,16 +254,41 @@ def _stem_envelopes(style: str, T: float, bar: float):
             "bass": fade("out", 0.5 * T - 0.15, 0.3),
         }
         b = {
-            "vocals": fade("in", 0, T),
-            "other": fade("in", 0, T),
+            "vocals": fade("in", 0.5 * T if clash else 0, T),
+            "other": fade("in", 0.5 * T if clash else 0, T),
             "drums": fade("in", 0, T),
             "bass": fade("in", 0.5 * T - 0.05, 0.25),
         }
     return a, b
 
 
+def _vocal_safe_start(vocals_path, default_st, T):
+    """First vocal-phrase START in B's transition stem at/after default_st, so
+    B's vocal never fades in mid-word. None = keep the default envelope."""
+    import analysis
+    try:
+        r, win = analysis.rms_profile(vocals_path)
+    except Exception:
+        return None
+    med = _active_median(r)
+    if med < 1e-4:
+        return None
+    active = r >= 0.35 * med
+    gap = max(1, int(0.6 / win))
+    for i in range(int(default_st / win), len(r)):
+        if active[i] and not active[max(0, i - gap):i].any():
+            t = i * win
+            return round(t, 3) if t < T - 0.6 else None
+    return None
+
+
+VOCAL_DEFAULT_ST = {"automix": lambda T, bar: T / 2 + bar,
+                    "neural": lambda T, bar: 0.3 * T,
+                    "acapella": lambda T, bar: 0.78 * T}
+
+
 def _render_style(style, A, cut, B, b_start, delay_s, T, bar, bpm, med_a,
-                  sa, sb, work, out_path, tmax=None):
+                  sa, sb, work, out_path, tmax=None, clash=False):
     """Render one transition. A/B are audio files; cut/b_start/delay_s are in
     those files' local clocks. sa/sb: stem dicts already sliced to T (or None)."""
     import analysis
@@ -272,7 +299,14 @@ def _render_style(style, A, cut, B, b_start, delay_s, T, bar, bpm, med_a,
     enc = ["-c:a", "libmp3lame", "-b:a", "320k", str(out_path)]
 
     if style in STEM_STYLES:
-        env_a, env_b = _stem_envelopes(style, T, bar)
+        env_a, env_b = _stem_envelopes(style, T, bar, clash)
+        # B-side vocal safety: start B's vocal on its own phrase, not mid-word
+        vd = VOCAL_DEFAULT_ST.get(style)
+        if vd and sb:
+            v = _vocal_safe_start(sb["vocals"], vd(T, bar), T)
+            if v is not None:
+                env_b["vocals"] = (f"volume=0:enable='lt(t,{v:.3f})',"
+                                   f"afade=t=in:st={v:.3f}:d=0.5")
         order = ["vocals", "drums", "bass", "other"]
         cmd = ["ffmpeg", "-y", "-i", str(A)]
         for k in order:
@@ -398,6 +432,8 @@ def _prep(job, a_path, b_path, beats, need_stretch):
     ctx["grid_b_orig"] = grid_b
     job["a_facts"] = analysis.analyze(a_path)
     job["b_facts"] = analysis.analyze(b_path)
+    ctx["shift"], ctx["clash"] = analysis.harmony_plan(
+        job["a_facts"].get("camelot"), job["b_facts"].get("camelot"))
     ctx["bpm"] = grid_a["bpm"] or 120
     ctx["T"] = max(2.0, beats * 60.0 / ctx["bpm"])
     ctx["bar"] = grid_a["bar_len"]
@@ -421,10 +457,40 @@ def _prep(job, a_path, b_path, beats, need_stretch):
     job["stretch"] = round(ratio, 4)
 
     def make_b(stretched, override_orig=None):
+        import shutil as _sh
         out = work / ("b_matched.wav" if stretched else "b_plain.wav")
         stretching = stretched and abs(ratio - 1) > 0.005
-        af = (f"atempo={ratio:.4f}," if stretching else "") + f"volume={gain_b:.3f}"
-        _run(["ffmpeg", "-y", "-i", str(b_path), "-af", af, "-ac", "2", "-ar", "44100", str(out)])
+        shift = ctx.get("shift", 0) if stretched else 0  # only blends overlap harmonically
+        rb = _sh.which("rubberband")
+        if rb and (stretching or shift):
+            # rubberband: better transient preservation than atempo, and clean
+            # pitch shifting for key matching
+            raw = work / "b_raw.wav"
+            _run(["ffmpeg", "-y", "-i", str(b_path), "-ac", "2", "-ar", "44100", str(raw)])
+            cmd = [rb, "--fine", "-t", f"{1 / ratio:.6f}" if stretching else "1.0"]
+            if shift:
+                cmd += ["-p", str(shift)]
+            rbo = work / "b_rb.wav"
+            r = subprocess.run(cmd + [str(raw), str(rbo)], capture_output=True, text=True)
+            if r.returncode != 0:  # older rubberband without --fine
+                r = subprocess.run([c for c in cmd if c != "--fine"] + [str(raw), str(rbo)],
+                                   capture_output=True, text=True)
+            if r.returncode == 0:
+                _run(["ffmpeg", "-y", "-i", str(rbo), "-af", f"volume={gain_b:.3f}", str(out)])
+                job["stretch_tool"] = "rubberband"
+            else:
+                rb = None
+        if not (rb and (stretching or shift)):
+            af = (f"atempo={ratio:.4f}," if stretching else "")
+            if shift:
+                f = 2 ** (shift / 12)
+                af += f"asetrate=44100*{f:.6f},aresample=44100,atempo={1 / f:.6f},"
+            af += f"volume={gain_b:.3f}"
+            _run(["ffmpeg", "-y", "-i", str(b_path), "-af", af, "-ac", "2", "-ar", "44100", str(out)])
+        if shift:
+            job["key_action"] = f"B pitch-shifted {shift:+d} st for key match"
+        elif ctx.get("clash") and stretched:
+            job["key_action"] = "keys clash — B melodic layers held until the swap"
         grid = _grid_scaled(ctx["grid_b_orig"], ratio if stretching else 1.0)
 
         def snap(t):
@@ -452,24 +518,15 @@ def _prep(job, a_path, b_path, beats, need_stretch):
                     loud = t
                     break
                 t += grid["bar_len"]
-        return {"file": out, "snap": snap,
+        return {"file": out, "snap": snap, "sections": secs,
                 "drop": snap(drop) if drop is not None else None, "loud": loud}
     ctx["make_b"] = make_b
     return ctx
 
 
 def _entry_for(bvar, style, T):
-    """B's entry point. Drop-to-drop: for blend styles, enter early enough that
-    B's DROP lands exactly on the rhythm swap; hard styles slam straight into
-    the drop itself."""
-    if bvar.get("manual"):
-        return bvar["b_start"], "manual"
-    if bvar["drop"] is not None:
-        frac = SWAP_FRAC.get(style)
-        if frac:
-            return max(0.0, bvar["snap"](bvar["drop"] - frac * T)), "drop-to-drop"
-        return bvar["drop"], "on the drop"
-    return bvar["loud"] or 0.0, "first loud bar"
+    c = _entry_candidates(bvar, style, T)[0]
+    return c[0], c[2]
 
 
 def _manual_cut(ctx, a_path, style, T, wanted):
@@ -481,7 +538,9 @@ def _manual_cut(ctx, a_path, style, T, wanted):
     return max(10.0, min(_snap_grid(wanted, ctx["grid_a"]), target))
 
 
-def _pick_cut(ctx, a_path, style, T):
+def _exit_candidates(ctx, a_path, style, T, limit=3):
+    """Up to `limit` phrase-snapped exit points of A (latest first), each with
+    the energy of the section it leaves — used for energy-continuity pairing."""
     import analysis
     dur_a = _duration(a_path)
     target = dur_a - (1.0 if style in HARD_STYLES else T + 1.0)
@@ -493,15 +552,15 @@ def _pick_cut(ctx, a_path, style, T):
     def alive(t):
         return _mean_rms(ctx["r_a"], ctx["win_a"], t, t + look) >= 0.45 * ctx["med_a"]
 
-    # structure-aware: hand over at the END of the last high-energy section
-    # (right after the final chorus/drop), snapped to the PHRASE grid built
-    # from REAL downbeats
     try:
         secs = analysis.detect_sections(a_path)
     except Exception:
         secs = []
     ctx["a_sections"] = secs
+    cands = []
     for s in reversed(secs):
+        if len(cands) >= limit:
+            break
         if s["energy"] < 0.55 or s["end"] < 20:
             continue
         cut = _phrase_snap(min(s["end"], target), secs, grid_a)
@@ -510,17 +569,63 @@ def _pick_cut(ctx, a_path, style, T):
         while cut > s["start"] + bar and not alive(cut):
             cut = _phrase_prev(cut, secs, grid_a)
         if cut > 20 and alive(cut):
-            ctx["cut_reason"] = "end of last high-energy phrase"
-            return cut
+            cands.append((cut, s["energy"], "end of last high-energy phrase"
+                          if not cands else "end of an earlier phrase"))
+    if not cands:
+        cut = _phrase_snap(target, secs, grid_a)
+        while cut > target:
+            cut = _phrase_prev(cut, secs, grid_a)
+        while cut > 20 and not alive(cut):
+            cut = _phrase_prev(cut, secs, grid_a)
+        cands = [(cut, None, "loudness fallback")]
+    return cands
 
-    # fallback: latest loud phrase boundary before the target
-    cut = _phrase_snap(target, secs, grid_a)
-    while cut > target:
-        cut = _phrase_prev(cut, secs, grid_a)
-    while cut > 20 and not alive(cut):
-        cut = _phrase_prev(cut, secs, grid_a)
-    ctx["cut_reason"] = "loudness fallback"
+
+def _pick_cut(ctx, a_path, style, T):
+    cut, _, reason = _exit_candidates(ctx, a_path, style, T)[0]
+    ctx["cut_reason"] = reason
     return cut
+
+
+def _entry_candidates(bvar, style, T, limit=3):
+    """Up to `limit` entry points of B (earliest first) with section energies."""
+    if bvar.get("manual"):
+        return [(bvar["b_start"], None, "manual")]
+    frac = SWAP_FRAC.get(style)
+
+    def entry(t):
+        off = frac * T if frac else 0.0
+        return bvar["snap"](max(0.0, t - off))
+
+    cands = []
+    prev_e = None
+    for s in bvar.get("sections") or []:
+        if s["start"] > 120 or len(cands) >= limit:
+            break
+        jump = prev_e is not None and s["energy"] - prev_e >= 0.10
+        if s["energy"] >= 0.65 and (jump or s["energy"] >= 0.75):
+            cands.append((entry(s["start"]), s["energy"],
+                          "drop-to-drop" if frac else "on the drop"))
+        prev_e = s["energy"]
+    if not cands:
+        base = bvar["drop"] if bvar.get("drop") is not None else (bvar.get("loud") or 0.0)
+        cands = [(entry(base), None, "first loud section")]
+    return cands
+
+
+def _choose_pair(a_cands, b_cands):
+    """Energy continuity: pick the exit/entry pair whose section energies match,
+    with a mild preference for the latest exit and earliest entry."""
+    best = None
+    for ia, (ca, ea, ra) in enumerate(a_cands):
+        for ib, (cb, eb, rb) in enumerate(b_cands):
+            if ea is None or eb is None:
+                score = 0.5 + 0.04 * ia + 0.04 * ib
+            else:
+                score = abs(ea - eb) + 0.04 * ia + 0.04 * ib
+            if best is None or score < best[0]:
+                best = (score, ca, cb, ra, rb, ea, eb)
+    return best
 
 
 def process_job(job_id, a_path, b_path, opts):
@@ -545,14 +650,24 @@ def process_job(job_id, a_path, b_path, opts):
         bvar = ctx["make_b"](stretched=style not in HARD_STYLES,
                              override_orig=opts.get("b_start"))
         b_matched = bvar["file"]
-        b_start, entry_plan = _entry_for(bvar, style, T)
-        job["b_skip"] = round(b_start, 2)
-        job["entry_plan"] = entry_plan
+        manual_cut = opts.get("cut")
 
-        if opts.get("cut") is not None:
-            cut = _manual_cut(ctx, a_path, style, T, float(opts["cut"]))
+        if manual_cut is None and not bvar.get("manual"):
+            # joint choice: pair the exit and entry whose energies match
+            a_cands = _exit_candidates(ctx, a_path, style, T)
+            b_cands = _entry_candidates(bvar, style, T)
+            _, cut, b_start, reason_a, plan_b, ea, eb = _choose_pair(a_cands, b_cands)
+            ctx["cut_reason"] = reason_a
+            job["entry_plan"] = plan_b
+            if ea is not None and eb is not None:
+                job["energy_match"] = f"exit {ea:.2f} ↔ entry {eb:.2f}"
         else:
-            cut = _pick_cut(ctx, a_path, style, T)
+            b_start, job["entry_plan"] = _entry_for(bvar, style, T)
+            if manual_cut is not None:
+                cut = _manual_cut(ctx, a_path, style, T, float(manual_cut))
+            else:
+                cut = _pick_cut(ctx, a_path, style, T)
+        job["b_skip"] = round(b_start, 2)
 
         sa_cut = sb = None
         delay_s = cut
@@ -601,7 +716,7 @@ def process_job(job_id, a_path, b_path, opts):
         out_path = DJ_DIR / out_name
         job["stage"] = "Rendering the transition..."
         _render_style(style, a_path, cut, b_matched, b_start, delay_s, T, bar, bpm,
-                      ctx["med_a"], sa_cut, sb, work, out_path)
+                      ctx["med_a"], sa_cut, sb, work, out_path, clash=ctx.get("clash", False))
         job["file"] = f"/djmixes/{out_name}"
         job["stage"] = "Done!"
     except Exception as e:
@@ -659,7 +774,8 @@ def _preview_job(job, a_path, b_path, opts):
             delay_s = PRE if style in HARD_STYLES else PRE + delta
             out = DJ_DIR / f"preview_{uid}_{style}.mp3"
             _render_style(style, a_clip, PRE, B, 0.0, delay_s, T, bar, bpm,
-                          ctx["med_a"], sa_cut, sb, work, out, tmax=PRE + T + 15)
+                          ctx["med_a"], sa_cut, sb, work, out, tmax=PRE + T + 15,
+                          clash=ctx.get("clash", False))
             previews.append({"style": style, "file": f"/djmixes/{out.name}"})
         except Exception as e:
             previews.append({"style": style, "error": str(e)})

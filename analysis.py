@@ -142,6 +142,39 @@ def _beat_grid_impl(path: Path, max_seconds: int) -> dict:
             "beat_len": 60 / bpm, "bar_len": 4 * 60 / bpm}
 
 
+def _camelot_parse(c: str):
+    return int(c[:-1]), c[-1]
+
+
+def camelot_compatible(a: str, b: str) -> bool:
+    """Harmonic mixing rule: same slot, relative major/minor (same number),
+    or an adjacent number with the same letter."""
+    if not a or not b:
+        return True
+    na, la = _camelot_parse(a)
+    nb, lb = _camelot_parse(b)
+    if na == nb:
+        return True
+    if la == lb and ((na - nb) % 12 == 1 or (nb - na) % 12 == 1):
+        return True
+    return False
+
+
+def harmony_plan(cam_a: str, cam_b: str, max_shift: int = 2):
+    """(semitone_shift_for_B, clash). Shifting pitch by +1 semitone moves a
+    Camelot slot by +7 positions; try small shifts before declaring a clash."""
+    if not cam_a or not cam_b or camelot_compatible(cam_a, cam_b):
+        return 0, False
+    nb, lb = _camelot_parse(cam_b)
+    for s in (1, -1, 2, -2):
+        if abs(s) > max_shift:
+            continue
+        nb2 = ((nb - 1 + 7 * s) % 12) + 1
+        if camelot_compatible(cam_a, f"{nb2}{lb}"):
+            return s, False
+    return 0, True
+
+
 def madmom_grid(path: Path) -> dict:
     """Neural beat/downbeat tracking (madmom RNN + DBN decoder). Returns real,
     per-beat times instead of a rigid phase+period grid — this is what makes
