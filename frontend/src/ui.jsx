@@ -80,7 +80,7 @@ export function Status({ busy, text, pct, error }) {
 }
 
 /* ---------- result card with player ---------- */
-export function MediaCard({ title, url, video, actions }) {
+export function MediaCard({ title, url, video, actions, accent }) {
   const safe = encodeURI(url)
   const name = decodeURIComponent(url.split('/').pop())
   return (
@@ -92,7 +92,7 @@ export function MediaCard({ title, url, video, actions }) {
           <a className="chip" href={safe} download={name}>Download</a>
         </span>
       </div>
-      {video ? <video controls src={safe} /> : <Waveform src={safe} height={72} />}
+      {video ? <video controls src={safe} /> : <Waveform src={safe} height={72} accent={accent} />}
     </div>
   )
 }

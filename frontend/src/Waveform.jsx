@@ -29,7 +29,7 @@ const PlayIcon = ({ playing }) => playing ? (
  *  - click to seek
  *  - drag to select a region (when selectable); onSelect([a, b] | null)
  */
-export function Waveform({ src, selectable, onSelect, height = 96 }) {
+export function Waveform({ src, selectable, onSelect, height = 96, accent }) {
   const canvasRef = useRef(null)
   const audioRef = useRef(null)
   const dragRef = useRef(null)
@@ -98,15 +98,15 @@ export function Waveform({ src, selectable, onSelect, height = 96 }) {
         let y1 = mid + mn * mid * 0.94
         let y2 = mid + mx * mid * 0.94
         if (y2 - y1 < 1.6) { y1 = mid - 0.8; y2 = mid + 0.8 }
-        ctx.fillStyle = x <= playedX ? '#aaff00' : 'rgba(255,255,255,0.25)'
+        ctx.fillStyle = x <= playedX ? (accent || '#aaff00') : 'rgba(255,255,255,0.25)'
         ctx.fillRect(x, Math.min(y1, y2), Math.max(1, bw * 0.72), Math.abs(y2 - y1))
       }
       if (sel && duration) {
         const x1 = (sel[0] / duration) * w
         const x2 = (sel[1] / duration) * w
-        ctx.fillStyle = 'rgba(170,255,0,0.16)'
+        ctx.fillStyle = accent ? 'rgba(255,255,255,0.13)' : 'rgba(170,255,0,0.16)'
         ctx.fillRect(x1, 0, x2 - x1, h)
-        ctx.fillStyle = 'rgba(170,255,0,0.85)'
+        ctx.fillStyle = accent ? 'rgba(255,255,255,0.75)' : 'rgba(170,255,0,0.85)'
         ctx.fillRect(x1, 0, 1.5, h)
         ctx.fillRect(x2 - 1.5, 0, 1.5, h)
       }
@@ -114,7 +114,7 @@ export function Waveform({ src, selectable, onSelect, height = 96 }) {
     draw()
     window.addEventListener('resize', draw)
     return () => window.removeEventListener('resize', draw)
-  }, [peaks, pos, sel, duration])
+  }, [peaks, pos, sel, duration, accent])
 
   function timeAt(e) {
     const rect = canvasRef.current.getBoundingClientRect()

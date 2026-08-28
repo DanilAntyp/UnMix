@@ -5,7 +5,7 @@ import { fmtTimePrecise } from './Waveform'
 
 /* Inline convert & trim controls for a file already on the server.
    `sel` (from the waveform selection) auto-fills the trim range. */
-export function ConvertControls({ serverFile, sel }) {
+export function ConvertControls({ serverFile, sel, accent }) {
   const [fmt, setFmt] = useState('mp3-192')
   const [start, setStart] = useState('')
   const [end, setEnd] = useState('')
@@ -60,7 +60,7 @@ export function ConvertControls({ serverFile, sel }) {
       <Status {...(status || {})} />
       {result && (
         <div className="results">
-          <MediaCard title={result.name} url={result.file} />
+          <MediaCard title={result.name} url={result.file} accent={accent} />
         </div>
       )}
     </div>

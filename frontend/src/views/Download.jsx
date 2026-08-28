@@ -45,7 +45,7 @@ export function DownloadView({ onExtract, onKaraoke }) {
   }
 
   return (
-    <div className="glass">
+    <div className="glass metal-scope">
       <PanelHead
         tile="tile-violet" icon={<IconDownload />}
         title="YouTube Downloader" sub="Paste a link, pick a quality"
@@ -125,8 +125,8 @@ export function DownloadView({ onExtract, onKaraoke }) {
                   download={decodeURIComponent(result.file.split('/').pop())}>Download</a>
               </span>
             </div>
-            <Waveform src={encodeURI(result.file)} selectable onSelect={setSel} />
-            <ConvertControls serverFile={result.file} sel={sel} />
+            <Waveform src={encodeURI(result.file)} selectable onSelect={setSel} accent="#e8e8e8" />
+            <ConvertControls serverFile={result.file} sel={sel} accent="#e8e8e8" />
           </div>
         </div>
       )}

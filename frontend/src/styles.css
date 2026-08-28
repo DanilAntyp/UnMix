@@ -285,6 +285,68 @@ video { width: 100%; border-radius: 10px; background: #000; }
 .convert-row input { width: 90px; }
 .convert-row input:focus, .convert-row select:focus { border-color: rgba(255, 255, 255, 0.3); }
 
+/* ---------- metal scope: matches the liquid metal button ---------- */
+.glass.metal-scope {
+  background: linear-gradient(180deg, #1c1c1c 0%, #131313 100%);
+  border: 1px solid rgba(255, 255, 255, 0.07);
+  border-radius: 26px;
+  box-shadow:
+    0 0 0 1px rgba(0, 0, 0, 0.3),
+    0 36px 14px rgba(0, 0, 0, 0.04),
+    0 20px 12px rgba(0, 0, 0, 0.1),
+    0 9px 9px rgba(0, 0, 0, 0.14),
+    0 2px 5px rgba(0, 0, 0, 0.18);
+}
+.metal-scope .input {
+  border-radius: 100px; padding: 14px 22px;
+  background: linear-gradient(180deg, #0c0c0c, #151515);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  box-shadow: inset 0 2px 6px rgba(0, 0, 0, 0.45);
+}
+.metal-scope .input:focus { border-color: rgba(255, 255, 255, 0.24); background: linear-gradient(180deg, #0e0e0e, #181818); }
+.metal-scope .chip {
+  border-radius: 100px; padding: 8px 16px; color: #c9c9c9;
+  background: linear-gradient(180deg, #272727, #161616);
+  border: 1px solid rgba(255, 255, 255, 0.09);
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.4);
+}
+.metal-scope .chip:hover { background: linear-gradient(180deg, #2f2f2f, #1c1c1c); color: #fff; }
+.metal-scope .chip.grad {
+  background: linear-gradient(180deg, #f2f2f2, #b6b6b6);
+  color: #111; border-color: rgba(255, 255, 255, 0.35);
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.5), inset 0 1px 0 rgba(255, 255, 255, 0.7);
+}
+.metal-scope .chip.grad:hover { background: linear-gradient(180deg, #ffffff, #c9c9c9); }
+.metal-scope .tile {
+  background: linear-gradient(180deg, #2b2b2b, #161616);
+  border-color: rgba(255, 255, 255, 0.1);
+}
+.metal-scope .tile svg { color: #d9d9d9; }
+.metal-scope .fmt { border-radius: 20px; background: #101010; border-color: rgba(255, 255, 255, 0.07); }
+.metal-scope .fmt-head { background: linear-gradient(180deg, #1b1b1b, #151515); }
+.metal-scope .fmt-head img { border-radius: 12px; }
+.metal-scope .fmt th { background: #161616; }
+.metal-scope .fmt td { border-top-color: rgba(255, 255, 255, 0.05); }
+.metal-scope .media-card {
+  background: linear-gradient(180deg, #191919, #121212);
+  border-radius: 20px; border-color: rgba(255, 255, 255, 0.07);
+  box-shadow: 0 9px 9px rgba(0, 0, 0, 0.1), 0 2px 5px rgba(0, 0, 0, 0.14);
+}
+.metal-scope .bar-fill { background: linear-gradient(90deg, #bdbdbd, #f0f0f0); }
+.metal-scope .spinner { border-top-color: #dcdcdc; }
+.metal-scope .badge { background: rgba(255, 255, 255, 0.07); color: #a8a8a8; }
+.metal-scope .convert-row select, .metal-scope .convert-row input {
+  border-radius: 100px; padding: 9px 16px;
+  background: linear-gradient(180deg, #0c0c0c, #151515);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+}
+.metal-scope .convert-inline { border-top-color: rgba(255, 255, 255, 0.05); }
+.metal-scope .wave-btn {
+  background: linear-gradient(180deg, #ececec, #a6a6a6); color: #111;
+  box-shadow: 0 2px 5px rgba(0, 0, 0, 0.35), inset 0 1px 0 rgba(255, 255, 255, 0.7);
+}
+.metal-scope .wave-btn:hover { background: linear-gradient(180deg, #ffffff, #bdbdbd); }
+
 @media (max-width: 760px) {
   .sidebar { display: none; }
   .main { padding: 28px 18px 60px; }
