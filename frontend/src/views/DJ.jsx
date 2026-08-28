@@ -124,6 +124,7 @@ export function DJView() {
       setStatus({
         text: `Done! Transition at ${fmtTime(j.transition_at)}` +
           (j.b_skip > 0.5 ? ` · B enters from ${fmtTime(j.b_skip)}` : '') +
+          (j.entry_plan && j.entry_plan !== 'manual' ? ` (${j.entry_plan})` : '') +
           (Math.abs(j.stretch - 1) > 0.005 ? ` · B stretched ×${j.stretch}` : '') +
           (j.fallback ? ` · fell back to ${j.fallback}` : ''),
       })
@@ -138,7 +139,7 @@ export function DJView() {
   const styleInfo = STYLES.find(s => s.id === style)
 
   return (
-    <div className="dj-flat metal-scope">
+    <div className="glass metal-scope dj-console">
       <div className="dj-decks">
         <Deck label="Deck A" hint="plays first" value={a} onChange={setA}
           files={files} refresh={refresh} />

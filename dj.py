@@ -104,6 +104,44 @@ def _slice(src: Path, start: float, dur: float, out: Path):
     _run(["ffmpeg", "-y", "-i", str(src), "-ss", f"{start:.3f}", "-t", f"{dur:.3f}", str(out)])
 
 
+# where the rhythm-section swap sits inside the transition window, per style
+SWAP_FRAC = {"automix": 0.5, "neural": 0.5, "bassswap": 0.5, "acapella": 0.4}
+
+
+def _phrase_snap(t, sections, bar_phase, bar_len, phrase_bars=4):
+    """Snap t to the phrase grid: phrases count in groups of `phrase_bars` bars,
+    anchored at the (bar-snapped) start of the section containing t. Music
+    changes on phrase boundaries, so entries/exits land 'in the right place'."""
+    anchor = bar_phase
+    for s in sections or []:
+        if s["start"] <= t + 1e-6:
+            k = round((s["start"] - bar_phase) / bar_len)
+            anchor = bar_phase + k * bar_len
+        else:
+            break
+    phrase = phrase_bars * bar_len
+    k = round((t - anchor) / phrase)
+    return max(0.0, anchor + k * phrase)
+
+
+def _find_drop(sections, limit=120.0):
+    """B's 'drop': the first strong section arriving after a quieter one, or
+    the first full-energy section as a fallback."""
+    prev_e = None
+    for s in sections or []:
+        if s["start"] > limit:
+            break
+        if prev_e is not None and s["energy"] >= 0.75 and s["energy"] - prev_e >= 0.12:
+            return s["start"]
+        prev_e = s["energy"]
+    for s in sections or []:
+        if s["start"] > 90:
+            break
+        if s["energy"] >= 0.7:
+            return s["start"]
+    return None
+
+
 def _stem_envelopes(style: str, T: float, bar: float):
     def fade(kind, st, d):
         st = max(0.0, min(st, T - 0.1))
@@ -342,34 +380,43 @@ def _prep(job, a_path, b_path, beats, need_stretch):
         if override_orig is not None:
             # user-picked entry point, given on B's ORIGINAL timeline
             t_local = float(override_orig) / ratio if stretching else float(override_orig)
-            return {"file": out, "b_start": snap(t_local)}
+            return {"file": out, "b_start": snap(t_local), "manual": True}
 
-        # structure-aware entry: the first section that plays at full energy
-        b_start = None
         try:
             secs = analysis.detect_sections(out)
         except Exception:
             secs = []
-        for s in secs:
-            if s["start"] > 90:
-                break
-            if s["energy"] >= 0.7:
-                b_start = snap(s["start"])
-                break
-        if b_start is None:  # fallback: first loud bar
+        drop = _find_drop(secs)
+        loud = None
+        if drop is None:  # fallback: first loud bar
             r_b, win_b = analysis.rms_profile(out)
             med = _active_median(r_b)
-            b_start = 0.0
+            loud = 0.0
             t = grid["bar"]
             dur = _duration(out)
             while t < min(60, dur - 8):
                 if _mean_rms(r_b, win_b, t, t + 2 * grid["bar_len"]) >= 0.6 * med:
-                    b_start = t
+                    loud = t
                     break
                 t += grid["bar_len"]
-        return {"file": out, "b_start": b_start}
+        return {"file": out, "snap": snap,
+                "drop": snap(drop) if drop is not None else None, "loud": loud}
     ctx["make_b"] = make_b
     return ctx
+
+
+def _entry_for(bvar, style, T):
+    """B's entry point. Drop-to-drop: for blend styles, enter early enough that
+    B's DROP lands exactly on the rhythm swap; hard styles slam straight into
+    the drop itself."""
+    if bvar.get("manual"):
+        return bvar["b_start"], "manual"
+    if bvar["drop"] is not None:
+        frac = SWAP_FRAC.get(style)
+        if frac:
+            return max(0.0, bvar["snap"](bvar["drop"] - frac * T)), "drop-to-drop"
+        return bvar["drop"], "on the drop"
+    return bvar["loud"] or 0.0, "first loud bar"
 
 
 def _manual_cut(ctx, a_path, style, T, wanted):
@@ -400,27 +447,31 @@ def _pick_cut(ctx, a_path, style, T):
         return _mean_rms(ctx["r_a"], ctx["win_a"], t, t + look) >= 0.45 * ctx["med_a"]
 
     # structure-aware: hand over at the END of the last high-energy section
-    # (i.e. right after the final chorus/drop, not inside the outro)
+    # (right after the final chorus/drop), snapped to the PHRASE grid
     try:
         secs = analysis.detect_sections(a_path)
     except Exception:
         secs = []
     ctx["a_sections"] = secs
+    phrase = 4 * bar
     for s in reversed(secs):
         if s["energy"] < 0.55 or s["end"] < 20:
             continue
-        cut = snap(min(s["end"], target))
+        cut = _phrase_snap(min(s["end"], target), secs, grid_a["bar"], bar)
+        while cut > target:
+            cut -= phrase
         while cut > s["start"] + bar and not alive(cut):
-            cut -= bar
+            cut -= phrase
         if cut > 20 and alive(cut):
-            ctx["cut_reason"] = "end of last high-energy section"
+            ctx["cut_reason"] = "end of last high-energy phrase"
             return cut
 
-    # fallback: latest loud bar before the target
-    k = int((target - grid_a["bar"]) // bar)
-    cut = grid_a["bar"] + k * bar
+    # fallback: latest loud phrase boundary before the target
+    cut = _phrase_snap(target, secs, grid_a["bar"], bar)
+    while cut > target:
+        cut -= phrase
     while cut > 20 and not alive(cut):
-        cut -= bar
+        cut -= phrase
     ctx["cut_reason"] = "loudness fallback"
     return cut
 
@@ -446,8 +497,10 @@ def process_job(job_id, a_path, b_path, opts):
 
         bvar = ctx["make_b"](stretched=style not in HARD_STYLES,
                              override_orig=opts.get("b_start"))
-        b_matched, b_start = bvar["file"], bvar["b_start"]
+        b_matched = bvar["file"]
+        b_start, entry_plan = _entry_for(bvar, style, T)
         job["b_skip"] = round(b_start, 2)
+        job["entry_plan"] = entry_plan
 
         if opts.get("cut") is not None:
             cut = _manual_cut(ctx, a_path, style, T, float(opts["cut"]))
@@ -522,9 +575,11 @@ def _preview_job(job, a_path, b_path, opts):
     ctx = _prep(job, a_path, b_path, beats, need_stretch=True)
     T, bar, bpm, work = ctx["T"], ctx["bar"], ctx["bpm"], ctx["work"]
 
-    b_soft = ctx["make_b"](stretched=True, override_orig=opts.get("b_start"))
-    b_hard = (ctx["make_b"](stretched=False, override_orig=opts.get("b_start"))
-              if any(s in HARD_STYLES for s in styles) else b_soft)
+    b_soft_var = ctx["make_b"](stretched=True, override_orig=opts.get("b_start"))
+    b_hard_var = (ctx["make_b"](stretched=False, override_orig=opts.get("b_start"))
+                  if any(s in HARD_STYLES for s in styles) else b_soft_var)
+    b_soft = {"file": b_soft_var["file"], "b_start": _entry_for(b_soft_var, "automix", T)[0]}
+    b_hard = {"file": b_hard_var["file"], "b_start": _entry_for(b_hard_var, "cut", T)[0]}
 
     if opts.get("cut") is not None:
         cut = _manual_cut(ctx, a_path, "automix", T, float(opts["cut"]))
@@ -587,15 +642,16 @@ def dj_inspect():
         cut = _pick_cut(ctx, a, "automix", T)
 
         secs_b = analysis.detect_sections(b)
-        b_start = None
-        for s in secs_b:
-            if s["start"] > 90:
-                break
-            if s["energy"] >= 0.7:
-                k = round((s["start"] - grid_b["bar"]) / grid_b["bar_len"])
-                b_start = max(0.0, grid_b["bar"] + k * grid_b["bar_len"])
-                break
-        if b_start is None:
+
+        def snap_b(t):
+            k = round((t - grid_b["bar"]) / grid_b["bar_len"])
+            return max(0.0, grid_b["bar"] + k * grid_b["bar_len"])
+
+        drop = _find_drop(secs_b)
+        if drop is not None:
+            # drop-to-drop default: enter early so B's drop lands on the swap
+            b_start = snap_b(max(0.0, snap_b(drop) - 0.5 * T))
+        else:
             b_start = grid_b["bar"]
 
         return jsonify(

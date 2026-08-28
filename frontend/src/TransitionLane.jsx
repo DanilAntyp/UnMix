@@ -130,19 +130,21 @@ export function TransitionLane({ src, info, marker, onMarker, label, note }) {
           <span className="lane-time">{fmtTime(marker)}</span>
         </span>
       </div>
-      {!peaks && <div className="wave-loading" style={{ height: 92 }}>building waveform…</div>}
-      <canvas
-        ref={canvasRef}
-        style={{ width: '100%', height: 92, cursor: 'ew-resize', touchAction: 'none',
-                 display: peaks ? 'block' : 'none' }}
-        onPointerDown={e => {
-          e.currentTarget.setPointerCapture(e.pointerId)
-          dragRef.current = true
-          onMarker(snap(timeAt(e)))
-        }}
-        onPointerMove={e => { if (dragRef.current) onMarker(snap(timeAt(e))) }}
-        onPointerUp={() => { dragRef.current = false }}
-      />
+      <div className="lane-screen">
+        {!peaks && <div className="wave-loading" style={{ height: 88 }}>building waveform…</div>}
+        <canvas
+          ref={canvasRef}
+          style={{ width: '100%', height: 88, cursor: 'ew-resize', touchAction: 'none',
+                   display: peaks ? 'block' : 'none' }}
+          onPointerDown={e => {
+            e.currentTarget.setPointerCapture(e.pointerId)
+            dragRef.current = true
+            onMarker(snap(timeAt(e)))
+          }}
+          onPointerMove={e => { if (dragRef.current) onMarker(snap(timeAt(e))) }}
+          onPointerUp={() => { dragRef.current = false }}
+        />
+      </div>
       <audio ref={audioRef} src={encodeURI(src)} hidden
         onPlay={() => setPlaying(true)} onPause={() => setPlaying(false)}
         onEnded={() => setPlaying(false)} />
