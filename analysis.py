@@ -54,30 +54,80 @@ def _stft_mag(y: np.ndarray) -> np.ndarray:
     return np.abs(np.fft.rfft(frames, axis=1)).astype(np.float32)
 
 
-def _detect_bpm(S: np.ndarray) -> float:
+def _onset_env(S: np.ndarray) -> np.ndarray:
     flux = np.diff(S, axis=0)
     np.maximum(flux, 0, out=flux)
-    env = flux.sum(axis=1)
-    env -= env.mean()
+    return flux.sum(axis=1)
+
+
+def _detect_bpm(S: np.ndarray) -> float:
+    """Comb-scored tempo estimate: each BPM candidate is supported by its own
+    lag AND its multiples, which resists the classic half/double-tempo error."""
+    env = _onset_env(S)
+    env = env - env.mean()
     ac = np.correlate(env, env, mode="full")[len(env) - 1:]
-    fps = SR / HOP
-    min_lag = max(1, int(fps * 60 / 200))   # 200 BPM
-    max_lag = min(len(ac) - 2, int(fps * 60 / 60))  # 60 BPM
-    if max_lag <= min_lag:
+    if len(ac) < 4 or ac[0] <= 0:
         return 0.0
-    seg = ac[min_lag:max_lag + 1]
-    best = int(np.argmax(seg)) + min_lag
-    # parabolic interpolation for sub-lag precision
-    a, b, c = ac[best - 1], ac[best], ac[best + 1]
-    denom = a - 2 * b + c
-    shift = 0.5 * (a - c) / denom if denom != 0 else 0.0
-    lag = best + float(np.clip(shift, -0.5, 0.5))
-    bpm = 60.0 * fps / lag
-    while bpm < 70:
-        bpm *= 2
-    while bpm > 180:
-        bpm /= 2
-    return round(bpm, 1)
+    ac = ac / ac[0]
+    fps = SR / HOP
+
+    def ac_at(lag):
+        i = int(round(lag))
+        return float(ac[i]) if 1 <= i < len(ac) else 0.0
+
+    best_bpm, best_score = 0.0, -1.0
+    for bpm10 in range(600, 2001, 5):          # 60.0 .. 200.0 step 0.5
+        bpm = bpm10 / 10
+        lag = fps * 60 / bpm
+        score = ac_at(lag) + 0.5 * ac_at(2 * lag) + 0.3 * ac_at(4 * lag)
+        if bpm < 85:
+            score *= 0.82
+        elif bpm > 155:
+            score *= 0.88
+        if score > best_score:
+            best_score, best_bpm = score, bpm
+    return round(best_bpm, 1)
+
+
+def beat_grid(path: Path, max_seconds: int = 180) -> dict:
+    """Estimate tempo, beat phase and bar (downbeat) phase of a track.
+    Beat phase maximizes onset energy on the beat comb; the downbeat is the
+    one of the 4 beat offsets with the most low-frequency (kick/bass) energy."""
+    y = _load_mono(path, max_seconds)
+    S = _stft_mag(y)
+    bpm = _detect_bpm(S)
+    fps = SR / HOP
+    period = fps * 60 / max(bpm, 1)
+    env = _onset_env(S)
+    n = len(env)
+
+    def comb(offset, step, e):
+        idx = np.arange(offset, n - 1, step).astype(int)
+        return float(e[idx].mean()) if len(idx) else 0.0
+
+    offsets = np.linspace(0, period, 48, endpoint=False)
+    beat = max(offsets, key=lambda o: comb(o, period, env))
+
+    freqs = np.fft.rfftfreq(N_FFT, 1 / SR)
+    low = np.diff(S[:, freqs < 150], axis=0)
+    np.maximum(low, 0, out=low)
+    low_env = low.sum(axis=1)
+    bar = max((beat + k * period for k in range(4)),
+              key=lambda o: comb(o, 4 * period, low_env))
+
+    return {"bpm": bpm, "beat": beat / fps, "bar": bar / fps,
+            "beat_len": 60 / bpm, "bar_len": 4 * 60 / bpm}
+
+
+def rms_profile(path: Path, max_seconds: int = 600, win: float = 0.4):
+    """Coarse loudness envelope: (rms_per_window, window_seconds)."""
+    y = _load_mono(path, max_seconds)
+    w = int(SR * win)
+    n = len(y) // w
+    if n == 0:
+        return np.zeros(1), win
+    r = np.sqrt((y[:n * w].reshape(n, w) ** 2).mean(axis=1))
+    return r, win
 
 
 def _detect_key(S: np.ndarray):

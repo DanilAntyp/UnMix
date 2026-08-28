@@ -5,7 +5,8 @@ import { LiquidMetalButton } from '../LiquidMetalButton'
 import { fmtTime } from '../Waveform'
 
 const STYLES = [
-  { id: 'neural', name: 'Neural stem swap', desc: 'vocals leave first, bass swaps on the drop, drums hand over last (recommended)' },
+  { id: 'automix', name: 'AutoMix', desc: 'Apple Music-style smooth blend: phrase-aligned, intro-skipping, loudness-matched (recommended)' },
+  { id: 'neural', name: 'Neural stem swap', desc: 'vocals leave first, bass swaps on the drop, drums hand over last' },
   { id: 'bassswap', name: 'Bass swap', desc: 'everything blends, the basslines hard-swap halfway' },
   { id: 'crossfade', name: 'Crossfade', desc: 'classic equal-power blend' },
   { id: 'filter', name: 'Filter sweep', desc: 'track A drains through a rising highpass' },
@@ -48,8 +49,8 @@ export function DJView() {
   const [files, setFiles] = useState([])
   const [a, setA] = useState(null)
   const [b, setB] = useState(null)
-  const [style, setStyle] = useState('neural')
-  const [beats, setBeats] = useState(16)
+  const [style, setStyle] = useState('automix')
+  const [beats, setBeats] = useState(32)
   const [status, setStatus] = useState(null)
   const [result, setResult] = useState(null)
   const [busy, setBusy] = useState(false)
@@ -83,7 +84,11 @@ export function DJView() {
         pollRef.current = setTimeout(() => poll(id), 1200)
         return
       }
-      setStatus({ text: `Done! Transition hits at ${fmtTime(j.transition_at)}${j.stretch !== 1 ? ` · B stretched ×${j.stretch}` : ''}` })
+      setStatus({
+        text: `Done! Transition at ${fmtTime(j.transition_at)}` +
+          (j.b_skip > 0.5 ? ` · B enters from ${fmtTime(j.b_skip)} (intro skipped)` : '') +
+          (Math.abs(j.stretch - 1) > 0.005 ? ` · B stretched ×${j.stretch}` : ''),
+      })
       setResult(j)
       setBusy(false)
     } catch (e) {
@@ -114,7 +119,7 @@ export function DJView() {
         </select>
         <label>Length:</label>
         <select value={beats} onChange={e => setBeats(parseInt(e.target.value))} style={{ maxWidth: 130 }}>
-          {[4, 8, 16, 32].map(n => <option key={n} value={n}>{n} beats</option>)}
+          {[4, 8, 16, 32, 64].map(n => <option key={n} value={n}>{n} beats</option>)}
         </select>
       </div>
       {styleInfo && <div className="wave-hint" style={{ marginTop: 8 }}>{styleInfo.desc}</div>}
