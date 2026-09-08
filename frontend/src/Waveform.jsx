@@ -29,7 +29,8 @@ const PlayIcon = ({ playing }) => playing ? (
  *  - click to seek
  *  - drag to select a region (when selectable); onSelect([a, b] | null)
  */
-export function Waveform({ src, selectable, onSelect, height = 96, accent }) {
+/** marks: [{start, end}] in seconds — green zones showing where mixes happen */
+export function Waveform({ src, selectable, onSelect, height = 96, accent, marks }) {
   const canvasRef = useRef(null)
   const audioRef = useRef(null)
   const dragRef = useRef(null)
@@ -92,29 +93,52 @@ export function Waveform({ src, selectable, onSelect, height = 96, accent }) {
       const n = peaks.length
       const bw = w / n
       const playedX = duration ? (pos / duration) * w : 0
+      const zones = duration && marks?.length
+        ? marks.map(m => [(Math.max(0, m.start) / duration) * w,
+                          (Math.min(duration, m.end) / duration) * w])
+        : []
+      for (const [zx0, zx1] of zones) {
+        ctx.fillStyle = 'rgba(196,255,98,0.08)'
+        ctx.fillRect(zx0, 0, zx1 - zx0, h)
+      }
       for (let i = 0; i < n; i++) {
         const [mn, mx] = peaks[i]
         const x = i * bw
         let y1 = mid + mn * mid * 0.94
         let y2 = mid + mx * mid * 0.94
         if (y2 - y1 < 1.6) { y1 = mid - 0.8; y2 = mid + 0.8 }
-        ctx.fillStyle = x <= playedX ? (accent || '#aaff00') : 'rgba(255,255,255,0.25)'
+        const inMix = zones.some(([zx0, zx1]) => x >= zx0 && x < zx1)
+        ctx.fillStyle = x <= playedX
+          ? (inMix ? '#c4ff62' : (accent || '#c4ff62'))
+          : (inMix ? 'rgba(196,255,98,0.55)' : 'rgba(255,255,255,0.25)')
         ctx.fillRect(x, Math.min(y1, y2), Math.max(1, bw * 0.72), Math.abs(y2 - y1))
+      }
+      for (const [zx0, zx1] of zones) {
+        if (zx1 - zx0 > 26) {
+          ctx.fillStyle = 'rgba(196,255,98,0.8)'
+          ctx.font = '600 9px -apple-system, sans-serif'
+          ctx.fillText('MIX', zx0 + 4, h - 4)
+        }
       }
       if (sel && duration) {
         const x1 = (sel[0] / duration) * w
         const x2 = (sel[1] / duration) * w
-        ctx.fillStyle = accent ? 'rgba(255,255,255,0.13)' : 'rgba(170,255,0,0.16)'
+        ctx.fillStyle = accent ? 'rgba(255,255,255,0.13)' : 'rgba(196,255,98,0.16)'
         ctx.fillRect(x1, 0, x2 - x1, h)
-        ctx.fillStyle = accent ? 'rgba(255,255,255,0.75)' : 'rgba(170,255,0,0.85)'
+        ctx.fillStyle = accent ? 'rgba(255,255,255,0.75)' : 'rgba(196,255,98,0.85)'
         ctx.fillRect(x1, 0, 1.5, h)
         ctx.fillRect(x2 - 1.5, 0, 1.5, h)
       }
     }
     draw()
+    const observer = new ResizeObserver(draw)
+    observer.observe(canvas)
     window.addEventListener('resize', draw)
-    return () => window.removeEventListener('resize', draw)
-  }, [peaks, pos, sel, duration, accent])
+    return () => {
+      observer.disconnect()
+      window.removeEventListener('resize', draw)
+    }
+  }, [peaks, pos, sel, duration, accent, marks])
 
   function timeAt(e) {
     const rect = canvasRef.current.getBoundingClientRect()

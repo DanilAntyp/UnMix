@@ -67,7 +67,7 @@ export function ExtractView({ handoff }) {
       <div className="head-row">
         <PanelHead
           tile="tile-sun" icon={<IconWave />}
-          title="Sound Extraction" sub="Isolate any part of a song — or split everything"
+          title="Separate the elements" sub="Vocals, drums, bass, and everything in between."
         />
         <div className="seg" title="Standard: 4 stems, best quality. Extended: 6 stems, adds guitar & piano.">
           <button className={model === 'htdemucs' ? 'on' : ''}
@@ -94,7 +94,7 @@ export function ExtractView({ handoff }) {
 
       {picked && (
         <div style={{ marginTop: 18, display: 'flex', justifyContent: 'center' }}>
-          <LiquidMetalButton label="Extract" width={150} onClick={run} disabled={busy} />
+          <LiquidMetalButton label="Isolate your sound" width={180} onClick={run} disabled={busy} />
         </div>
       )}
       <Status {...(status || {})} />

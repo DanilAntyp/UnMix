@@ -2,8 +2,9 @@ import { useEffect, useRef, useState } from 'react'
 import { fmtTime } from './Waveform'
 
 /* One deck lane for the transition editor: waveform with detected sections
-   painted by energy, plus a draggable bar-snapped marker. */
-export function TransitionLane({ src, info, marker, onMarker, label, note }) {
+   painted by energy, plus a draggable bar-snapped marker. The mix window
+   (marker → marker + mixBeats) is highlighted green. */
+export function TransitionLane({ src, info, marker, onMarker, label, note, mixBeats }) {
   const canvasRef = useRef(null)
   const audioRef = useRef(null)
   const dragRef = useRef(false)
@@ -84,7 +85,23 @@ export function TransitionLane({ src, info, marker, onMarker, label, note }) {
           ctx.fillText(s.label, x0 + 4, 10)
         }
       }
-      // waveform, brightness follows section energy
+      // mix window: marker → marker + mixBeats, in this track's own tempo
+      const mixLen = mixBeats && info.bar_len ? mixBeats * (info.bar_len / 4) : 0
+      const mixEnd = Math.min(marker + mixLen, duration)
+      const gx0 = (marker / duration) * w
+      const gx1 = (mixEnd / duration) * w
+      if (mixLen > 0) {
+        ctx.fillStyle = 'rgba(196,255,98,0.09)'
+        ctx.fillRect(gx0, 0, gx1 - gx0, h)
+        ctx.fillStyle = 'rgba(196,255,98,0.5)'
+        ctx.fillRect(gx1 - 1, 0, 1, h)
+        if (gx1 - gx0 > 30) {
+          ctx.fillStyle = 'rgba(196,255,98,0.75)'
+          ctx.font = '600 9px -apple-system, sans-serif'
+          ctx.fillText('MIX', gx0 + 5, h - 5)
+        }
+      }
+      // waveform, brightness follows section energy; green inside the mix window
       const mid = h / 2
       const bw = w / peaks.length
       const energyAt = t => {
@@ -98,7 +115,10 @@ export function TransitionLane({ src, info, marker, onMarker, label, note }) {
         const t = (i / peaks.length) * duration
         const alpha = 0.14 + 0.55 * energyAt(t)
         const half = Math.max(0.8, peaks[i] * mid * 0.94)
-        ctx.fillStyle = `rgba(255,255,255,${alpha.toFixed(3)})`
+        const inMix = mixLen > 0 && t >= marker && t < mixEnd
+        ctx.fillStyle = inMix
+          ? `rgba(196,255,98,${Math.min(1, alpha + 0.15).toFixed(3)})`
+          : `rgba(255,255,255,${alpha.toFixed(3)})`
         ctx.fillRect(x, mid - half, Math.max(1, bw * 0.72), half * 2)
       }
       // marker
@@ -113,9 +133,14 @@ export function TransitionLane({ src, info, marker, onMarker, label, note }) {
       ctx.fill()
     }
     draw()
+    const observer = new ResizeObserver(draw)
+    observer.observe(canvas)
     window.addEventListener('resize', draw)
-    return () => window.removeEventListener('resize', draw)
-  }, [peaks, marker, info, duration])
+    return () => {
+      observer.disconnect()
+      window.removeEventListener('resize', draw)
+    }
+  }, [peaks, marker, info, duration, mixBeats])
 
   function timeAt(e) {
     const rect = canvasRef.current.getBoundingClientRect()

@@ -48,16 +48,16 @@ export function DownloadView({ onExtract, onStudio, onKaraoke }) {
     <div className="glass metal-scope">
       <PanelHead
         tile="tile-violet" icon={<IconDownload />}
-        title="YouTube Downloader" sub="Paste a link, pick a quality"
+        title="Bring a record in" sub="Paste a YouTube link. Choose the format that fits your session."
       />
       <input
         className="input" type="url" value={url}
-        placeholder="https://www.youtube.com/watch?v=…"
+        placeholder="Paste a YouTube link…" aria-label="YouTube link"
         onChange={e => setUrl(e.target.value)}
         onKeyDown={e => e.key === 'Enter' && getFormats()}
       />
       <div style={{ marginTop: 16, display: 'flex', justifyContent: 'center' }}>
-        <LiquidMetalButton label="Get formats" width={170} onClick={getFormats} disabled={busy} />
+        <LiquidMetalButton label="Explore formats" width={170} onClick={getFormats} disabled={busy} />
       </div>
       <Status {...(status || {})} />
 

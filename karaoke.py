@@ -12,6 +12,7 @@ libass/drawtext, so there is no in-ffmpeg text rendering to lean on.)
 """
 import json
 import re
+import shutil
 import subprocess
 import tempfile
 import threading
@@ -224,7 +225,8 @@ def fetch_synced_lyrics(stem_name: str, duration: float):
 
 def probe_duration(path: Path) -> float:
     r = subprocess.run(["ffprobe", "-v", "error", "-show_entries", "format=duration",
-                        "-of", "csv=p=0", str(path)], capture_output=True, text=True)
+                        "-of", "csv=p=0", str(path)], capture_output=True, text=True,
+                       timeout=60)
     try:
         return float(r.stdout.strip())
     except ValueError:
@@ -315,6 +317,7 @@ def render_frames(lines, duration, work: Path):
 def process_job(job_id: str, audio_path: Path, stem_name: str, remove: set,
                 keep_source: bool = False):
     job = jobs[job_id]
+    work = None
     try:
         job["stage"] = "Looking up lyrics..."
         lines, lyric_source = None, None
@@ -375,7 +378,8 @@ def process_job(job_id: str, audio_path: Path, stem_name: str, remove: set,
                    "-i", str(mix_wav), "-shortest"]
         cmd += ["-c:v", "libx264", "-preset", "fast", "-crf", "20", "-pix_fmt", "yuv420p",
                 "-c:a", "aac", "-b:a", "192k", str(out_path)]
-        r = subprocess.run(cmd, capture_output=True, text=True)
+        # video render is the long pole; still bounded so it cannot hang forever
+        r = subprocess.run(cmd, capture_output=True, text=True, timeout=1800)
         if r.returncode != 0:
             raise RuntimeError("ffmpeg failed: " + r.stderr[-400:])
 
@@ -388,6 +392,10 @@ def process_job(job_id: str, audio_path: Path, stem_name: str, remove: set,
         job["done"] = True
         if not keep_source:
             audio_path.unlink(missing_ok=True)
+        # the finished video lives in KARAOKE_DIR; the scratch dir (stems,
+        # frames, wavs) is pure intermediate and would otherwise pile up
+        if work:
+            shutil.rmtree(work, ignore_errors=True)
 
 
 # ---------------------------------------------------------------- routes

@@ -576,13 +576,20 @@ DIST = APP_DIR / "frontend" / "dist"
 @app.get("/")
 def index():
     if (DIST / "index.html").exists():
-        return send_from_directory(DIST, "index.html")
+        # never cache the shell: it names the hashed bundle, so a cached copy
+        # keeps serving the previous build's JS after a rebuild
+        r = send_from_directory(DIST, "index.html")
+        r.headers["Cache-Control"] = "no-store, must-revalidate"
+        return r
     return PAGE  # fallback: the old inline frontend
 
 
 @app.get("/assets/<path:name>")
 def dist_assets(name):
-    return send_from_directory(DIST / "assets", name)
+
+    r = send_from_directory(DIST / "assets", name)
+    r.headers["Cache-Control"] = "public, max-age=31536000, immutable"
+    return r
 
 
 @app.post("/yt/info")
@@ -676,6 +683,8 @@ def yt_download():
     try:
         with yt_dlp.YoutubeDL(opts) as ydl:
             info = ydl.extract_info(url, download=True)
+        if info.get("entries"):  # ytsearch1: queries wrap the hit in a playlist
+            info = info["entries"][0]
         path = Path(ydl.prepare_filename(info))
         if kind == "audio":
             path = path.with_suffix(".mp3")
@@ -804,7 +813,7 @@ def convert():
         if end:
             cmd += ["-to", end]
         cmd += codec_args + [str(out_path)]
-        r = subprocess.run(cmd, capture_output=True, text=True)
+        r = subprocess.run(cmd, capture_output=True, text=True, timeout=900)
         if r.returncode != 0:
             return jsonify(error="ffmpeg failed: " + r.stderr[-300:]), 500
         return jsonify(file=f"/converted/{out_name}", name=out_name)
@@ -867,7 +876,7 @@ def studio_export():
     if cut:
         cmd += ["-ss", f"{max(0.0, start):.3f}", "-to", f"{end:.3f}"]
     cmd += ["-c:a", "libmp3lame", "-b:a", "320k", str(out_path)]
-    r = subprocess.run(cmd, capture_output=True, text=True)
+    r = subprocess.run(cmd, capture_output=True, text=True, timeout=900)
     if r.returncode != 0:
         return jsonify(error="ffmpeg failed: " + r.stderr[-300:]), 500
     return jsonify(file=f"/converted/{out_name}", name=out_name)
@@ -948,19 +957,16 @@ def _acoustid_key():
     return list(ACOUSTID_KEYS)
 
 
-@app.post("/recognize")
-def recognize():
-    """Identify a track: chromaprint fingerprint -> AcoustID -> artist/title."""
+def _recognize_file(p):
+    """chromaprint fingerprint -> AcoustID -> {artist, title, score} or None.
+    Raises RuntimeError when fingerprinting or every AcoustID key fails."""
     import json as _json
     import urllib.parse
     import urllib.request
-    data = request.get_json(silent=True) or {}
-    p = _resolve_library(data.get("file", ""))
-    if p is None:
-        return jsonify(error="file not found"), 404
-    r = subprocess.run(["fpcalc", "-json", str(p)], capture_output=True, text=True)
+    r = subprocess.run(["fpcalc", "-json", str(p)], capture_output=True,
+                       text=True, timeout=120)
     if r.returncode != 0:
-        return jsonify(error="fingerprinting failed (is chromaprint installed?)"), 500
+        raise RuntimeError("fingerprinting failed (is chromaprint installed?)")
     fp = _json.loads(r.stdout)
     last_err = "no AcoustID key worked"
     for key in _acoustid_key():
@@ -985,13 +991,166 @@ def recognize():
                             "artist": rec["artists"][0]["name"]}
                     if best is None or cand["score"] > best["score"]:
                         best = cand
-        if best is None:
-            return jsonify(found=False)
-        return jsonify(found=True, artist=best["artist"], title=best["title"],
-                       score=round(best["score"], 2),
-                       suggested=f"{best['artist']} - {best['title']}")
-    return jsonify(error=f"AcoustID unavailable: {last_err}. Put a free API key "
-                         f"from acoustid.org/new-application into acoustid_key.txt"), 502
+        return best
+    raise RuntimeError(f"AcoustID unavailable: {last_err}. Put a free API key "
+                       f"from acoustid.org/new-application into acoustid_key.txt")
+
+
+@app.post("/recognize")
+def recognize():
+    """Identify a track: chromaprint fingerprint -> AcoustID -> artist/title."""
+    data = request.get_json(silent=True) or {}
+    p = _resolve_library(data.get("file", ""))
+    if p is None:
+        return jsonify(error="file not found"), 404
+    try:
+        best = _recognize_file(p)
+    except RuntimeError as e:
+        msg = str(e)
+        return jsonify(error=msg), 500 if "fingerprinting" in msg else 502
+    if best is None:
+        return jsonify(found=False)
+    return jsonify(found=True, artist=best["artist"], title=best["title"],
+                   score=round(best["score"], 2),
+                   suggested=f"{best['artist']} - {best['title']}")
+
+
+from webmeta import dz_get as _dz_get, slug as _slug
+
+
+def _web_suggest_job(job, seed_path):
+    """Song picker, web edition: identify the seed track online, then rank
+    Deezer's artist-radio tracks (their own 'sounds like this' engine — stays
+    inside the genre) as candidates, then rank them on features measured from
+    each candidate's own 30s preview audio."""
+    import math
+    import urllib.parse
+    import numpy as np
+    import analysis
+    import webmeta
+    import dj as dj_mod
+    try:
+        job["stage"] = "Analyzing your track..."
+        fa = dict(analysis.analyze(seed_path))
+        fa["bpm"] = analysis.accurate_bpm(seed_path)
+        job["stage"] = "Identifying the track..."
+        meta = webmeta.track_meta(seed_path)
+        if meta is None:
+            # filename didn't match anything — identify by audio fingerprint
+            job["stage"] = "Name lookup failed — listening to the track (AcoustID)..."
+            try:
+                rec = _recognize_file(seed_path)
+            except RuntimeError:
+                rec = None
+            if rec:
+                q = f"{rec['artist']} {rec['title']}"
+                res = _dz_get("https://api.deezer.com/search?q="
+                              + urllib.parse.quote(q) + "&limit=1").get("data") or []
+                if res:
+                    meta = {"artist": res[0]["artist"]["name"], "title": res[0]["title"],
+                            "artist_id": res[0]["artist"]["id"], "track_id": res[0]["id"]}
+        if meta is None:
+            raise ValueError("couldn't identify this track online — "
+                             "try renaming it to 'Artist - Title'")
+        job["seed"] = {"artist": meta["artist"], "title": meta["title"],
+                       "bpm": fa.get("bpm"), "camelot": fa.get("camelot")}
+
+        # Deezer's radio for this artist = their similarity engine's picks,
+        # genre-consistent by construction (related-artist top hits are not)
+        job["stage"] = f"Tuning into {meta['artist']}'s station..."
+        pool = _dz_get(f"https://api.deezer.com/artist/{meta['artist_id']}/radio"
+                       ).get("data") or []
+        if not pool:  # some artists have no radio — fall back to related tops
+            job["stage"] = "No station — browsing related artists..."
+            related = (_dz_get(f"https://api.deezer.com/artist/{meta['artist_id']}/related?limit=6")
+                       .get("data") or [])
+            for ra in related:
+                pool += (_dz_get(f"https://api.deezer.com/artist/{ra['id']}/top?limit=5")
+                         .get("data") or [])
+
+        have = [_slug(p.name) for p in DL_DIR.iterdir() if not p.name.startswith(".")]
+
+        def in_library(t):
+            a, ti = _slug(t["artist"]["name"]), _slug(t["title"])
+            return any(a in h and ti in h for h in have)
+
+        seen, cands = {meta.get("track_id")}, []
+        for t in pool:
+            if t["id"] in seen or in_library(t):
+                continue
+            seen.add(t["id"])
+            cands.append(t)
+        cands = cands[:20]
+
+        # Rank web picks on measured audio, not metadata: each candidate's 30s
+        # preview is analyzed for real BPM, key and timbre, then scored through
+        # the same ranker the library uses.
+        siga = analysis.style_signals(seed_path)
+        va = analysis.timbre_vec(seed_path)
+        seed_fam = webmeta.genre_family((meta or {}).get("genre"))
+        feats = {}
+        for i, t in enumerate(cands):
+            job["stage"] = f"Listening to previews... ({i + 1}/{len(cands)})"
+            job["pct"] = round(i / max(1, len(cands)) * 100, 1)
+            f = webmeta.preview_features(t["id"], t.get("preview"))
+            if f:
+                feats[t["id"]] = f
+
+        stats = analysis.timbre_stats(
+            [va] + [np.asarray(f["timbre"], dtype=np.float32) for f in feats.values()])
+        meta_a = {"family": seed_fam, "genre": (meta or {}).get("genre")}
+        out = []
+        for i, t in enumerate(cands):
+            f = feats.get(t["id"])
+            mine = t["artist"]["id"] == meta["artist_id"]
+            origin = "same artist" if mine else f"{meta['artist']} radio pick #{i + 1}"
+            if f:
+                fb = {"bpm": f["bpm"], "camelot": f["camelot"]}
+                sigb = {k: f[k] for k in ("onset_density", "low_ratio", "mid_ratio")}
+                sim = analysis.timbre_sim_z(
+                    va, np.asarray(f["timbre"], dtype=np.float32), stats)
+                # radio candidates carry no genre tag of their own; the station
+                # is already genre-coherent, so treat them as the seed's family
+                scored = dj_mod._pair_score(fa, siga, fb, sigb, sim, meta_a,
+                                            {"family": seed_fam, "genre": None})
+                if scored is None:
+                    continue
+                match, reasons, style, _ratio = scored
+                reasons = [origin] + [r for r in reasons if "genre" not in r]
+            else:  # preview unavailable — rank on radio position alone
+                match = max(1, int(round(100 * math.exp(-0.03 * i - 0.6))))
+                reasons = [origin, "no preview to analyze"]
+                style, fb = None, {}
+            out.append({"artist": t["artist"]["name"], "title": t["title"],
+                        "match": match, "bpm": (f or {}).get("bpm"),
+                        "camelot": (f or {}).get("camelot"),
+                        "style": style, "reasons": reasons,
+                        "id": t["id"],
+                        "preview": t.get("preview") or None,
+                        "cover": (t.get("album") or {}).get("cover_small"),
+                        "query": f"{t['artist']['name']} {t['title']} official audio"})
+        out.sort(key=lambda m: -m["match"])
+        job["web_matches"] = out[:12]
+        job["analyzed"] = len(feats)
+        job["stage"] = "Done!"
+    except Exception as e:
+        job["error"] = str(e)
+    finally:
+        job["done"] = True
+
+
+@app.post("/dj/suggest/web")
+def dj_suggest_web():
+    import uuid as _uuid
+    data = request.get_json(silent=True) or {}
+    p = _resolve_library(data.get("file", ""))
+    if p is None:
+        return jsonify(error="pick a track first"), 400
+    job_id = _uuid.uuid4().hex[:12]
+    dj.jobs[job_id] = {"stage": "Starting...", "done": False, "error": None}
+    threading.Thread(target=_web_suggest_job, args=(dj.jobs[job_id], p),
+                     daemon=True).start()
+    return jsonify(job=job_id)
 
 
 @app.post("/midi")
@@ -1045,6 +1204,9 @@ def get_download(name):
 
 
 if __name__ == "__main__":
+    # scratch dirs from jobs that were killed or crashed before cleanup ran
+    freed = dj.sweep_temp()
+    if freed:
+        print(f"cleaned up {freed / 1e9:.1f} GB of leftover scratch files")
     threading.Timer(1.0, lambda: webbrowser.open("http://localhost:5555")).start()
-    print("UnMix running at http://localhost:5555")
     app.run(port=5555, threaded=True)

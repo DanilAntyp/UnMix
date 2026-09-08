@@ -78,7 +78,7 @@ export function KaraokeView({ handoff }) {
     <div className="glass metal-scope">
       <PanelHead
         tile="tile-rose" icon={<IconMic />}
-        title="Karaoke Mode" sub="Real synced lyrics, words light up as they are sung"
+        title="Your voice. Center stage." sub="Create an instrumental and a video with word-synced lyrics."
       />
       <DropZone onFile={pickLocal} icon={<IconMic width={30} height={30} color="#9a9aa8" />}
         hint="mp3, wav, flac, m4a …" accept="audio/*,.mp3,.wav,.flac,.m4a,.ogg,.aac" />

@@ -1,52 +1,184 @@
-# UnMix
+<h1 align="center">unmix.</h1>
 
-A local web app for taking music apart: download from YouTube, split songs into
-stems with AI, make real karaoke videos with synced lyrics, convert and trim.
-Everything runs on your machine — no accounts, no uploads to third parties.
+<p align="center"><sub>THE LOCAL AUDIO WORKSPACE</sub></p>
 
-## Features
+<p align="center">
+  <strong>Your music. Taken apart. Put together differently.</strong><br />
+  A local audio workspace for mixing tracks, isolating stems, building sets, and making karaoke.
+</p>
 
-1. **YouTube Downloader** — paste a link, pick a quality from the format table
-   (mp3 320k/128k, mp4 1080p/720p/480p/360p with file sizes). Downloaded audio
-   gets one-click "Extract sound →" and "Karaoke" buttons.
-2. **Sound Extraction** — drop a song, pick a sound (vocals / drums / bass /
-   other; the Extended 6-stem model adds guitar & piano, or "All instruments"
-   for every stem as its own file), get it isolated plus the track without it.
-   Powered by [Demucs](https://github.com/adefossez/demucs).
-3. **Convert & Trim** — drop any audio/video file, choose mp3 (320/192/128k),
-   wav, flac, or m4a, optionally set start/end times to cut a piece out.
-4. **Karaoke Mode** (its own window) — drop a song or send one from the
-   YouTube panel, tick what to mute, and it renders an mp4: black background,
-   lyrics in sync, each word lighting up yellow as it is sung, next line
-   previewed in gray. Real lyrics are fetched from LRCLIB when available and
-   word timing is measured from the vocal track by Whisper; unknown songs fall
-   back to full AI transcription.
+<p align="center">
+  <a href="#get-started">Get started</a> ·
+  <a href="#the-workspace">The workspace</a> ·
+  <a href="docs/mixing.md">Inside the mixer</a> ·
+  <a href="#development">Development</a>
+</p>
 
-Long operations (downloads, separation, transcription) show live progress
-percentages. Downloads are saved to `downloads/`, stems to `separated/`,
-karaoke videos to `karaoke/`, conversions to `converted/`.
+---
 
-## Setup (macOS)
+## Less setup. More sound.
+
+Load a track, pull out its vocals, find its next match, or turn a few records into
+a continuous set. UnMix brings the useful parts of an audio toolkit into one
+browser workspace. Processing happens on your machine, with no UnMix account or
+hosted rendering service.
+
+Two glowing decks. Readable waveforms. Direct controls. A dark violet/lime
+interface that puts the tools first, with responsive layouts, keyboard-accessible
+controls, and a reduced-motion option.
+
+## The workspace
+
+| Tool | What you can do |
+| :--- | :--- |
+| **Import** | Download from a YouTube link, choose audio/video quality, or convert and trim local files. |
+| **Stems** | Isolate vocals, drums, bass, and other instruments with Demucs. Choose the six-stem model for guitar and piano, then rebalance the stems. |
+| **DJ mixer** | Load two decks, inspect phrase and energy waveforms, adjust handover markers, and audition alternative transitions before exporting. |
+| **Sets** | Arrange a playlist and render a continuous mix with per-transition controls. |
+| **Karaoke** | Remove selected instruments and render an MP4 with synchronized, word-highlighted lyrics. |
+| **MIDI** | Turn a single-note melody or bass line into editable MIDI. Best with an isolated stem, not a full arrangement. |
+| **Library** | Browse, search, preview, and manage your sources and exports. Send a track straight to the DJ mixer. |
+
+## A mixer with three directions
+
+**Natural** keeps the original recordings and looks for a restrained, phrase-aware
+handover. **Club** explores longer blends and more flexible instrumental entries.
+**Creative** opens up stem-based transition methods for more transformative mixes.
+
+The planner considers local rhythm, energy, bass, harmony, and vocal activity—not
+just two BPM numbers. Timing and level checks can reject a bad overlap; when a
+confident blend is unavailable, Natural and Club use a short native-tempo handover.
+
+Start with **Natural → Auto direction → Auto length**. Load both decks, choose
+**Audition transitions**, listen, then export your preferred version. Manual cue
+markers and effects are there when you want to take over.
+
+> Music is not a solved matching problem. Vocal detection, phrasing, and separation
+> are estimates; some track pairs will still sound wrong. UnMix offers candidates
+> and controls, not a promise of professional-DJ quality. Your ears make the call.
+
+Read the [mixing guide](docs/mixing.md) for timing safeguards, exact audition
+exports, local preference learning, and blind listening comparisons.
+
+## Get started
+
+### macOS
+
+You need Git, Python 3, and FFmpeg. The built frontend is included, so Node.js is
+only needed when editing the interface.
 
 ```bash
+git clone https://github.com/DanilAntyp/UnMix.git
+cd UnMix
+
 brew install ffmpeg
 python3 -m venv .venv
-.venv/bin/pip install -r requirements.txt
-.venv/bin/python app.py     # opens http://localhost:5555
+.venv/bin/python -m pip install -r requirements.txt
+.venv/bin/python app.py
 ```
 
-The first separation downloads the Demucs weights (~80-300 MB) and the first
-karaoke run downloads the Whisper large-v3-turbo weights (~1.6 GB); after that
-everything runs offline. Separation uses the Apple GPU (MPS) when available.
+Open **http://localhost:5555**. The app also attempts to open it automatically.
 
-## Command line
+- **First run:** Demucs and Whisper download their model weights when first used.
+  Allow extra time and disk space; no music or model weights are bundled here.
+- **Hardware:** Demucs uses Apple Silicon's MPS backend or CUDA when available,
+  with CPU fallback. Processing long tracks can take several minutes.
+- **Optional tools:** `brew install rubberband chromaprint` enables the external
+  time-stretch tool and audio fingerprinting. Recognition can use your own
+  AcoustID application key in the ignored `acoustid_key.txt` file.
+- **Optional analysis:** the allin1 neural phrase model is not installed or
+  downloaded automatically. The mixer falls back to spectral section analysis.
+- **Other platforms:** the core uses Python and FFmpeg, but macOS is the documented
+  setup. Karaoke currently references a macOS font path in `karaoke.py`; adjust it
+  before using that renderer elsewhere.
 
-There is also a standalone CLI for vocal extraction:
+Keep the server on localhost. It is a personal desktop tool, not an authenticated
+multi-user service intended for public internet exposure.
+
+## Local processing, clear boundaries
+
+Separation, rendering, and transcription run locally. This does **not** mean the
+entire app is offline: downloads, model acquisition, lyric lookup, music metadata,
+audio recognition, online suggestions, and web fonts can contact external services.
+Recognition sends an audio fingerprint; metadata/lyric searches can send track
+information. Existing local audio can be processed without those online features
+once the required models are available.
+
+Your library and generated files stay out of source control:
+
+```text
+downloads/       Source audio and video
+separated/      Extracted stems
+djmixes/        Mixes, auditions, and saved candidates
+karaoke/        Lyric videos
+converted/      Converted and trimmed exports
+midi/           Transcribed notes
+```
+
+Analysis caches, listening ratings, learned preferences, local credentials, model
+weights, and audio/video/MIDI files are ignored by Git too. The built frontend
+is intentionally included. Supply your own media and only
+download, process, or share material you have permission to use.
+
+## Development
+
+The stack is **React + Vite** in front, **Flask + Python** behind it, with
+**FFmpeg**, **Demucs**, and **faster-whisper** handling audio and transcription.
+
+Run the Python server as above, then in another terminal:
 
 ```bash
-.venv/bin/python extract_vocals.py song.mp3
+cd frontend
+npm ci
+npx vite
 ```
 
-Options: `--out results/`, `--model htdemucs_ft` (higher quality, ~4x slower),
-`--mp3`. Works with mp3, wav, flac, m4a and most other audio formats; multiple
-files can be passed at once.
+Vite proxies application requests to the local Flask server. To rebuild the UI
+served by Flask, run this from the repository root:
+
+```bash
+cd frontend
+npx vite build
+```
+
+Commit the updated `frontend/dist/` together with its source changes. That keeps
+the clone-and-run path available without a Node.js build step.
+
+### Checks
+
+From the repository root, with FFmpeg installed:
+
+```bash
+.venv/bin/python -m unittest test_dj_transitions test_mixengine test_naturalmix -v
+```
+
+These tests cover audio-engine regressions and safeguards. They are not a
+listening-quality benchmark. For ear-based comparisons, see the
+[blind listening workflow](docs/mixing.md).
+
+### Command-line stem extraction
+
+```bash
+.venv/bin/python extract_vocals.py path/to/song.mp3 --out separated/
+```
+
+Add `--mp3` for MP3 output, or `--model htdemucs_ft` for the slower fine-tuned
+model. Multiple input files are supported.
+
+## Built on good work
+
+UnMix uses [Demucs](https://github.com/adefossez/demucs),
+[faster-whisper](https://github.com/SYSTRAN/faster-whisper),
+[FFmpeg](https://ffmpeg.org), [yt-dlp](https://github.com/yt-dlp/yt-dlp),
+[React](https://react.dev), [Vite](https://vite.dev), and
+[Lucide](https://lucide.dev). Lyrics can come from [LRCLIB](https://lrclib.net),
+and optional neural structure analysis uses
+[all-in-one](https://github.com/mir-aidj/all-in-one).
+
+Found an awkward transition or a broken workflow? [Open an issue](https://github.com/DanilAntyp/UnMix/issues)
+with your platform, steps to reproduce, mixing mode, and what you heard. Do not
+attach copyrighted recordings, private library dumps, or credentials.
+
+---
+
+<p align="center"><strong>unmix.</strong><br /><sub>Made for making.</sub></p>

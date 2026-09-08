@@ -50,7 +50,7 @@ export function ConvertView() {
     <div className="glass">
       <PanelHead
         tile="tile-mint" icon={<IconScissors />}
-        title="Convert & Trim" sub="Change format or cut a piece out of any audio or video file"
+        title="Cut to the good part" sub="Trim a moment. Change the format. Keep what moves you."
       />
       <DropZone onFile={pick} icon={<IconScissors width={30} height={30} color="#9a9aa8" />}
         hint="any audio or video file" />

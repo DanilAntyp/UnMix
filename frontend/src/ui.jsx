@@ -86,6 +86,8 @@ export function DropZone({ onFile, hint, icon, accept }) {
   return (
     <div
       className={'drop' + (hover ? ' hover' : '')}
+      role="button" tabIndex={0} aria-label="Choose an audio or video file"
+      onKeyDown={e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); inputRef.current.click() } }}
       onClick={() => inputRef.current.click()}
       onDragEnter={e => { prevent(e); setHover(true) }}
       onDragOver={e => { prevent(e); setHover(true) }}
@@ -97,7 +99,7 @@ export function DropZone({ onFile, hint, icon, accept }) {
       }}
     >
       <div className="drop-icon">{icon}</div>
-      <p><strong>Drop a file here</strong> or click to choose</p>
+      <p><strong>Drop your sound here</strong><span className="drop-or">or <u>browse files</u> from your device</span></p>
       {hint && <span className="drop-hint">{hint}</span>}
       <input
         ref={inputRef} type="file" hidden
@@ -112,7 +114,7 @@ export function DropZone({ onFile, hint, icon, accept }) {
 export function Status({ busy, text, pct, error }) {
   if (!text) return <div className="status" />
   return (
-    <div className={'status' + (error ? ' error' : '')}>
+    <div className={'status' + (error ? ' error' : '')} role={error ? 'alert' : 'status'} aria-live="polite">
       {busy && <span className="spinner" />}
       <span>{text}{pct != null ? ` — ${Math.round(pct)}%` : ''}</span>
       {busy && pct != null && (
@@ -123,7 +125,7 @@ export function Status({ busy, text, pct, error }) {
 }
 
 /* ---------- result card with player ---------- */
-export function MediaCard({ title, url, video, actions, accent }) {
+export function MediaCard({ title, url, video, actions, accent, marks }) {
   const safe = encodeURI(url)
   const name = decodeURIComponent(url.split('/').pop())
   return (
@@ -136,7 +138,7 @@ export function MediaCard({ title, url, video, actions, accent }) {
           <a className="chip" href={safe} download={name}>Download</a>
         </span>
       </div>
-      {video ? <video controls src={safe} /> : <Waveform src={safe} height={72} accent={accent} />}
+      {video ? <video controls src={safe} /> : <Waveform src={safe} height={72} accent={accent} marks={marks} />}
     </div>
   )
 }

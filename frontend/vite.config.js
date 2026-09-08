@@ -6,7 +6,7 @@ export default defineConfig({
   server: {
     proxy: {
       // during `npm run dev`, forward API calls to the Flask backend
-      '^/(yt|separate|convert|progress|karaoke/(start|status|video)|downloads|separated|converted)': {
+      '^/(yt|separate|convert|progress|karaoke|downloads|separated|converted|files|upload|analyze|dj|djmixes|library|midi|recognize|studio)(/|$|\\?)': {
         target: 'http://localhost:5555',
         changeOrigin: true,
       },

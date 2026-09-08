@@ -75,7 +75,7 @@ export function MidiView() {
     <div className="glass metal-scope">
       <PanelHead
         tile="tile-mint" icon={<IconPiano />}
-        title="Audio to MIDI" sub="Turn a melody, bassline or vocal into notes you can drop into any DAW"
+        title="Catch the melody" sub="Turn a vocal, bassline, or instrument into editable MIDI notes."
       />
       <DropZone onFile={pick} icon={<IconPiano width={30} height={30} color="#9a9aa8" />}
         hint="works best on a single instrument — extract a stem first (bass, vocals)"

@@ -16,7 +16,7 @@ function fmtDate(ts) {
   return new Date(ts * 1000).toLocaleDateString(undefined, { day: 'numeric', month: 'short' })
 }
 
-export function LibraryView() {
+export function LibraryView({ onDJ }) {
   const [items, setItems] = useState([])
   const [kind, setKind] = useState('all')
   const [q, setQ] = useState('')
@@ -61,11 +61,11 @@ export function LibraryView() {
     <div className="glass metal-scope">
       <PanelHead
         tile="tile-mint" icon={<IconNote />}
-        title="Library" sub="Everything you've made, in one place"
+        title="The collection" sub="Your sources, experiments, and finished work. Ready for another play."
       />
       <div className="lib-bar">
         <input className="input" style={{ maxWidth: 320, padding: '10px 16px' }}
-          placeholder="search…" value={q} onChange={e => setQ(e.target.value)} />
+          placeholder="Find a record, stem, or mix…" aria-label="Search your collection" value={q} onChange={e => setQ(e.target.value)} />
         <div className="lib-kinds">
           {KINDS.map(([id, label]) => (
             <button key={id} className={'chip tiny' + (kind === id ? ' active' : '')}
@@ -103,6 +103,11 @@ export function LibraryView() {
                       <button className="chip" onClick={e => { e.stopPropagation(); recognize(it) }}
                         disabled={rec?.busy}>
                         {rec?.busy ? 'listening…' : 'Recognize song'}
+                      </button>
+                    )}
+                    {it.kind === 'downloads' && !it.video && !it.midi && (
+                      <button className="chip" onClick={e => { e.stopPropagation(); onDJ?.(it.file) }}>
+                        ✨ Find a mix partner
                       </button>
                     )}
                     <button className="chip" style={{ color: '#ff8a8a' }}

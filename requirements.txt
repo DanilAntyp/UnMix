@@ -1,6 +1,7 @@
 flask
 demucs
 soundfile
+scipy
 yt-dlp
 faster-whisper
 pillow

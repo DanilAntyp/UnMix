@@ -6,8 +6,11 @@ Pure numpy — no extra ML dependencies:
   Key: log-magnitude chroma profile correlated against the
        Krumhansl-Schmuckler major/minor key profiles.
 """
+import json
 import subprocess
 import tempfile
+import threading
+import time
 from pathlib import Path
 
 import numpy as np
@@ -20,6 +23,51 @@ HOP = 512
 # in-memory cache for expensive per-file analysis, keyed by (fn, path, mtime)
 _CACHE = {}
 
+# ...and a disk mirror of the small, expensive results, so a server restart
+# doesn't re-analyze the whole library (that used to cost ~2s per track).
+# Big arrays (rms profiles) stay memory-only; they are cheap to recompute.
+_DISK_FILE = Path(__file__).parent / "analysis_cache.json"
+_PERSIST = {"analyze", "signals", "sections", "madmom", "timbre", "bpm", "mix"}
+_CODECS = {"timbre": (lambda v: [round(float(x), 6) for x in v],
+                      lambda v: np.asarray(v, dtype=np.float32))}
+_disk = None
+_disk_lock = threading.Lock()
+_disk_dirty = False
+_disk_saved = 0.0
+
+
+def _disk_load():
+    global _disk
+    if _disk is None:
+        try:
+            _disk = json.loads(_DISK_FILE.read_text())
+        except Exception:
+            _disk = {}
+    return _disk
+
+
+def flush_cache(force=False):
+    """Write the disk cache out; called after batch work and periodically."""
+    global _disk_dirty, _disk_saved
+    with _disk_lock:
+        if _disk is None or not _disk_dirty:
+            return
+        if not force and time.time() - _disk_saved < 2.0:
+            return
+        try:
+            tmp = _DISK_FILE.with_suffix(".tmp")
+            tmp.write_text(json.dumps(_disk))
+            tmp.replace(_DISK_FILE)          # atomic: never a half-written cache
+            _disk_dirty, _disk_saved = False, time.time()
+        except OSError:
+            pass
+
+
+import atexit
+# a debounced save can otherwise discard minutes of analysis if the process
+# exits right after computing something
+atexit.register(lambda: flush_cache(force=True))
+
 
 def _cache_key(name, path, *extra):
     p = Path(path)
@@ -27,12 +75,31 @@ def _cache_key(name, path, *extra):
 
 
 def _cached(name, path, fn, *extra):
+    global _disk_dirty
     try:
         key = _cache_key(name, path, *extra)
     except OSError:
         return fn()
-    if key not in _CACHE:
-        _CACHE[key] = fn()
+    if key in _CACHE:
+        return _CACHE[key]
+    if name in _PERSIST:
+        dkey = "|".join(str(x) for x in key)
+        d = _disk_load()
+        if dkey in d:
+            dec = _CODECS.get(name, (None, None))[1]
+            val = d[dkey]
+            val = dec(val) if dec else val
+            _CACHE[key] = val
+            return val
+        val = fn()
+        _CACHE[key] = val
+        enc = _CODECS.get(name, (None, None))[0]
+        with _disk_lock:
+            d[dkey] = enc(val) if enc else val
+            _disk_dirty = True
+        flush_cache()
+        return val
+    _CACHE[key] = fn()
     return _CACHE[key]
 
 
@@ -55,7 +122,7 @@ def _load_mono(path: Path, max_seconds: int = 120):
         r = subprocess.run(
             ["ffmpeg", "-y", "-i", str(path), "-t", str(max_seconds),
              "-ac", "1", "-ar", str(SR), str(tmp_path)],
-            capture_output=True, text=True)
+            capture_output=True, text=True, timeout=300)
         if r.returncode != 0:
             raise RuntimeError("could not decode audio")
         y, _ = sf.read(tmp_path, dtype="float32")
@@ -204,11 +271,229 @@ def _style_signals_impl(path: Path) -> dict:
     }
 
 
+def _act_med(r: np.ndarray) -> float:
+    a = r[r > r.max() * 0.06] if len(r) and r.max() > 0 else r
+    return float(np.median(a)) if len(a) else 0.0
+
+
+def vocal_activity(path: Path, max_seconds: int = 600, win: float = 0.4):
+    """Per-window lead-vocal presence score in [0,1]: (scores, win_seconds).
+
+    When a Demucs vocal stem for this file already exists (the vocal-extract
+    feature writes separated/<name>_vocals.wav), the score is that stem's real
+    loudness. Otherwise a cheap spectral proxy: the 300-3000 Hz energy share,
+    smoothed and z-scored against the track's own loud windows. Calibrated
+    against Demucs stems on 12 library tracks: ~0.72 balanced accuracy, i.e.
+    good enough to RANK candidate mix placements, never to hard-gate them.
+    """
+    return _cached("vocal", path,
+                   lambda: _vocal_activity_impl(path, max_seconds, win),
+                   max_seconds, win)
+
+
+def _vocal_activity_impl(path: Path, max_seconds: int, win: float):
+    w = int(SR * win)
+    stem = _DISK_FILE.parent / "separated" / f"{Path(path).stem}_vocals.wav"
+    if stem.is_file():
+        try:
+            yv = _load_mono(stem, max_seconds)
+            n = len(yv) // w
+            if n:
+                rv = np.sqrt((yv[:n * w].reshape(n, w) ** 2).mean(axis=1))
+                med = _act_med(rv)
+                if med > 1e-6:
+                    return np.clip(rv / (0.7 * med), 0.0, 1.0).astype(np.float32), win
+        except Exception:
+            pass
+    y = _load_mono(path, max_seconds)
+    n = len(y) // w
+    if n < 4:
+        return np.zeros(max(n, 1), dtype=np.float32), win
+    frames = y[:n * w].reshape(n, w)
+    rms = np.sqrt((frames ** 2).mean(axis=1))
+    mag = np.abs(np.fft.rfft(frames * np.hanning(w).astype(np.float32), axis=1))
+    freqs = np.fft.rfftfreq(w, 1 / SR)
+    ratio = (mag[:, (freqs >= 300) & (freqs < 3000)].sum(axis=1)
+             / (mag.sum(axis=1) + 1e-9))
+    k = max(1, int(round(1.2 / win)))  # vocals sustain; cymbal spikes don't
+    ratio = np.convolve(ratio, np.ones(k) / k, mode="same")
+    med = _act_med(rms)
+    loud = rms >= 0.3 * med
+    base = ratio[loud] if loud.sum() >= 8 else ratio
+    mu, sd = float(base.mean()), float(base.std()) + 1e-9
+    score = 1.0 / (1.0 + np.exp(-((ratio - mu) / sd + 0.6) / 0.5))
+    score[rms < 0.25 * med] = 0.0  # nothing audible -> nothing to clash with
+    return score.astype(np.float32), win
+
+
+def accurate_bpm(path: Path) -> float:
+    """BPM we can actually rank on.
+
+    The cheap autocorrelation estimator agrees with madmom's neural tracker on
+    ~11 of 12 tracks, so paying 12s/track for madmom everywhere is waste. But
+    when the cheap estimator and librosa's beat tracker disagree, that IS the
+    unreliable case (measured: it flagged exactly the track the cheap estimator
+    got wrong), and only then is madmom worth its cost.
+    """
+    return _cached("bpm", path, lambda: _accurate_bpm_impl(path))
+
+
+def _fold(x, lo=78.0, hi=155.0):
+    if x <= 0:
+        return 0.0
+    while x > hi:
+        x /= 2
+    while x < lo:
+        x *= 2
+    return x
+
+
+def _accurate_bpm_impl(path: Path) -> float:
+    fast = analyze(path).get("bpm") or 0.0
+    try:
+        import librosa
+        y, sr = librosa.load(str(path), sr=SR, duration=120, mono=True)
+        tempo, _ = librosa.beat.beat_track(y=y, sr=sr)
+        lib = float(np.atleast_1d(tempo)[0])
+    except Exception:
+        return fast
+    if fast and abs(_fold(fast) - _fold(lib)) < 2.5:
+        return fast                       # two independent methods agree
+    try:                                  # they disagree -> ask the neural one
+        return madmom_grid(path).get("bpm") or fast
+    except Exception:
+        return fast
+
+
+def timbre_vec(path: Path) -> np.ndarray:
+    """Timbre fingerprint: MFCCs (spectral envelope — the 'colour' of the
+    sound), their frame-to-frame deltas (how much it moves), and spectral
+    contrast (peak-vs-valley per band, which separates tonal music from dense
+    walls of sound). Mean+std of each, L2-normalized.
+
+    Replaces a plain 26-band energy profile that scored rock at 0.950 against
+    an EDM seed while real EDM scored 0.945-0.972 — i.e. it was measuring
+    mastering EQ, not music, and could not tell the genres apart."""
+    return _cached("timbre", path, lambda: _timbre_vec_impl(path))
+
+
+def _timbre_vec_impl(path: Path) -> np.ndarray:
+    try:
+        import librosa
+        y, sr = librosa.load(str(path), sr=SR, duration=120, mono=True)
+        if not len(y):
+            raise ValueError("empty audio")
+        S = np.abs(librosa.stft(y, n_fft=N_FFT, hop_length=HOP))
+        mf = librosa.feature.mfcc(S=librosa.power_to_db(S ** 2), sr=sr, n_mfcc=20)
+        mf = mf[1:]                        # drop MFCC0: that is loudness
+        d = np.diff(mf, axis=1) if mf.shape[1] > 1 else np.zeros_like(mf)
+        sc = librosa.feature.spectral_contrast(S=S, sr=sr)
+        parts = [mf.mean(1), mf.std(1), np.abs(d).mean(1), sc.mean(1), sc.std(1)]
+    except Exception:
+        return _timbre_bands_fallback(path)
+    v = np.concatenate(parts).astype(np.float32)
+    v = np.nan_to_num(v)
+    # standardize blocks so MFCCs (large range) don't drown spectral contrast
+    out = []
+    for p in np.split(v, np.cumsum([len(x) for x in parts])[:-1]):
+        s = p.std()
+        out.append((p - p.mean()) / s if s > 1e-6 else p * 0)
+    v = np.concatenate(out)
+    n = float(np.linalg.norm(v))
+    return (v / n if n > 0 else v).astype(np.float32)
+
+
+def _timbre_bands_fallback(path: Path) -> np.ndarray:
+    """Log-band energy profile, used only if librosa is unavailable."""
+    y = _load_mono(path, max_seconds=120)
+    S = _stft_mag(y)
+    freqs = np.fft.rfftfreq(N_FFT, 1 / SR)
+    edges = np.geomspace(40, 10000, 27)
+    bands = []
+    for e0, e1 in zip(edges[:-1], edges[1:]):
+        m = (freqs >= e0) & (freqs < e1)
+        bands.append(np.log1p(S[:, m].mean(axis=1)) if m.any()
+                     else np.zeros(S.shape[0], dtype=np.float32))
+    B = np.stack(bands, axis=1)
+    mu = B.mean(axis=0)
+    mu -= mu.mean()
+    v = np.concatenate([mu, B.std(axis=0)])
+    n = float(np.linalg.norm(v))
+    return (v / n if n > 0 else v).astype(np.float32)
+
+
+def timbre_sim(a: np.ndarray, b: np.ndarray) -> float:
+    return float(np.dot(a, b))
+
+
+def timbre_stats(vecs):
+    """Per-dimension mean/std over a set of tracks.
+
+    Raw timbre vectors share a large common component, so plain cosine
+    similarity saturates (everything scored 0.89-0.97 and rap outranked EDM
+    for an EDM seed). Removing the corpus mean leaves only what makes a track
+    distinctive, which quadrupled genre separation in testing."""
+    if not len(vecs):
+        return None
+    M = np.stack(list(vecs))
+    return M.mean(0), M.std(0) + 1e-6
+
+
+def timbre_sim_z(a: np.ndarray, b: np.ndarray, stats) -> float:
+    """Cosine similarity in corpus-standardized space; ~0.3+ is a close match,
+    negative means actively unalike (plain timbre_sim has no useful zero)."""
+    if stats is None:
+        return timbre_sim(a, b)
+    mu, sd = stats
+    a, b = (a - mu) / sd, (b - mu) / sd
+    n = np.linalg.norm(a) * np.linalg.norm(b)
+    return float(a @ b / n) if n > 0 else 0.0
+
+
+def mix_profile(path: Path) -> dict:
+    """How easy this track is to mix into or out of — the thing a DJ actually
+    cares about and that BPM/key cannot express.
+
+    intro_len: seconds before it first hits full energy (a long, quiet intro
+    is room to blend under). cold_open: it starts at full energy, so there is
+    nothing to mix into. outro_len: trailing low-energy run to mix out of."""
+    return _cached("mix", path, lambda: _mix_profile_impl(path))
+
+
+def _mix_profile_impl(path: Path) -> dict:
+    try:
+        secs = detect_sections(path)
+    except Exception:
+        secs = []
+    if not secs:
+        return {"intro_len": 0.0, "outro_len": 0.0, "cold_open": False, "known": False}
+    peak = max(s["energy"] for s in secs) or 1.0
+    hot = 0.75 * peak
+    intro = 0.0
+    for s in secs:
+        if s["energy"] >= hot:
+            intro = s["start"]
+            break
+    else:
+        intro = secs[-1]["start"]
+    outro = 0.0
+    for s in reversed(secs):
+        if s["energy"] >= hot:
+            break
+        outro = secs[-1]["end"] - s["start"]
+    return {"intro_len": round(float(intro), 1),
+            "outro_len": round(float(outro), 1),
+            # no runway at all: the track is at full tilt from the first bar
+            "cold_open": bool(intro < 4.0),
+            "known": True}
+
+
 def madmom_grid(path: Path) -> dict:
     """Neural beat/downbeat tracking (madmom RNN + DBN decoder). Returns real,
     per-beat times instead of a rigid phase+period grid — this is what makes
     transitions land on the actual downbeat, not an estimated one."""
-    return _cached("madmom", path, lambda: _madmom_grid_impl(path))
+    from mix_timing import normalize
+    return normalize(_cached("madmom", path, lambda: _madmom_grid_impl(path)))
 
 
 def _madmom_grid_impl(path: Path) -> dict:
@@ -333,27 +618,61 @@ def align_beats(a_path: Path, a_start: float, b_path: Path, b_start: float,
         if n < 16:
             return 0.0, 0.0
         ea, eb = ea[:n], eb[:n]
-        max_lag = int(0.6 * beat * fps)
-        scores, lags = [], []
-        for lag in range(-max_lag, max_lag + 1):
-            if lag >= 0:
-                s = float((ea[lag:] * eb[:n - lag]).sum())
-            else:
-                s = float((ea[:n + lag] * eb[-lag:]).sum())
-            scores.append(s)
-            lags.append(lag)
-        arr = np.array(scores)
-        best_i = int(np.argmax(arr))
-        spread = arr.max() - arr.min()
-        conf = float((arr.max() - np.median(arr)) / spread) if spread > 0 else 0.0
-        delta = float(np.clip(lags[best_i] / fps, -0.5 * beat, 0.5 * beat))
-        return delta, conf
+        # A nudge cannot repair a wrong beat or sustained tempo drift. Compare
+        # normalized correlation at the beginning AND end of the overlap.
+        max_lag = max(1, int(0.20 * beat * fps))
+
+        def match(a, b):
+            scores = []
+            lags = range(-max_lag, max_lag + 1)
+            for lag in lags:
+                x, y = (a[lag:], b[:len(b) - lag]) if lag >= 0 else (a[:len(a) + lag], b[-lag:])
+                denom = float(np.linalg.norm(x) * np.linalg.norm(y))
+                scores.append(float(np.dot(x, y)) / denom if denom > 1e-9 else 0.0)
+            best = int(np.argmax(scores))
+            return (best - max_lag) / fps, max(0.0, scores[best])
+
+        delta, corr = match(ea, eb)
+        half = n // 2
+        early, ce = match(ea[:half], eb[:half])
+        late, cl = match(ea[half:], eb[half:])
+        drift = abs(early - late)
+        stability = max(0.0, 1.0 - drift / max(0.08, 0.2 * beat))
+        return float(delta), float(min(corr, ce, cl) * stability)
     except Exception:
         return 0.0, 0.0
 
 
 def rms_profile(path: Path, max_seconds: int = 600, win: float = 0.4):
     return _cached("rms", path, lambda: _rms_profile_impl(path, max_seconds, win), max_seconds, win)
+
+
+def energy_profile(path: Path, max_seconds=600, win=0.4):
+    """Local musical intensity: percussion, bass and level, independent of gain.
+
+    A mastered breakdown can be nearly as loud as a chorus. Onset activity
+    and low-frequency power distinguish that change in arrangement.
+    """
+    return _cached("energy", path, lambda: _energy_profile_impl(path, max_seconds, win), max_seconds, win)
+
+
+def _energy_profile_impl(path, max_seconds, win):
+    y = _load_mono(path, max_seconds)
+    S = _stft_mag(y)
+    flux = np.r_[0.0, _onset_env(S)]
+    freqs = np.fft.rfftfreq(N_FFT, 1 / SR)
+    bass = np.sqrt(np.mean(S[:, (freqs >= 40) & (freqs < 200)] ** 2, axis=1))
+    level = np.sqrt(np.mean(S ** 2, axis=1))
+    n = max(1, int(len(y) / SR / win))
+    features = np.zeros((n, 3))
+    for i in range(n):
+        lo, hi = int(i * win * SR / HOP), max(1, int((i + 1) * win * SR / HOP))
+        for j, curve in enumerate((flux, bass, level)):
+            seg = curve[lo:hi]
+            features[i, j] = seg.mean() if len(seg) else 0
+    scale = np.maximum(np.percentile(features, 85, axis=0), 1e-6)
+    normalized = np.clip(features / scale, 0, 1.25)
+    return (normalized @ np.array([0.45, 0.35, 0.20])).astype(np.float32), win
 
 
 def _rms_profile_impl(path: Path, max_seconds: int, win: float):

@@ -15,4 +15,55 @@ mashups/
 midi/
 djmixes/
 feedback.jsonl
+mix_preference_model.json
+mix_references.json
 allin1_cache/
+
+# Personal analysis, web lookups, and listening history
+analysis_cache.json
+preview_cache.json
+webmeta.json
+ratings.jsonl
+mix_preference_model.tmp
+mix_references.tmp
+
+# Local credentials and machine-specific configuration
+.env
+.env.*
+!.env.example
+acoustid_key.txt
+cookies.txt
+*.pem
+*.key
+.idea/
+.vscode/
+.pytest_cache/
+*.log
+
+# Media belongs in the local library, not in source control.
+# Deliberate documentation images (SVG/PNG/JPG) remain allowed.
+*.[mM][pP]3
+*.[wW][aA][vV]
+*.[fF][lL][aA][cC]
+*.[mM]4[aAbBpPvV]
+*.[aA][aA][cC]
+*.[oO][gG][gG]
+*.[oO][pP][uU][sS]
+*.[aA][iI][fF]
+*.[aA][iI][fF][fF]
+*.[mM][pP]4
+*.[mM][oO][vV]
+*.[wW][eE][bB][mM]
+*.[mM][kK][vV]
+*.[mM][iI][dD]
+*.[mM][iI][dD][iI]
+
+# Downloaded model artifacts
+*.pth
+*.pt
+*.ckpt
+*.safetensors
+
+# Retired hero artwork: keep local, not needed by the current interface
+/frontend/src/assets/spectral-loop.png
+/frontend/src/assets/ARTWORK.md

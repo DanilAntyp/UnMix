@@ -62,7 +62,7 @@ export function StudioView({ handoff }) {
     <div className="glass metal-scope">
       <PanelHead
         tile="tile-violet" icon={<IconSliders />}
-        title="Stem Studio" sub="Split a song into tracks, remix the balance, export your mix"
+        title="The fader room" sub="A fresh balance. A different perspective. Remix the stems your way."
       />
       {!stems && (
         <>
