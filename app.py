@@ -691,7 +691,8 @@ def yt_download():
         if kind == "audio":
             path = path.with_suffix(".mp3")
         if not path.exists():
-            candidates = sorted(DL_DIR.glob("*"), key=lambda p: p.stat().st_mtime)
+            candidates = sorted((p for p in DL_DIR.glob("*") if p.is_file()),
+                                key=lambda p: p.stat().st_mtime)
             if not candidates:
                 raise FileNotFoundError("downloaded file not found")
             path = candidates[-1]

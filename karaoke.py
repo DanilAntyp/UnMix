@@ -417,8 +417,10 @@ def karaoke_start():
         server_file = data.get("server_file", "")
         if not server_file.startswith("/downloads/"):
             return jsonify(error="no file uploaded"), 400
-        path = (DL_DIR / Path(server_file).name).resolve()
-        if path.parent != DL_DIR.resolve() or not path.is_file():
+        # songs filed into library folders sit deeper than DL_DIR's top level
+        root = DL_DIR.resolve()
+        path = (root / server_file[len("/downloads/"):].strip("/")).resolve()
+        if not path.is_file() or root not in path.parents:
             return jsonify(error="file not found"), 404
         remove = set((data.get("remove") or "vocals").split(","))
         stem_name = path.stem

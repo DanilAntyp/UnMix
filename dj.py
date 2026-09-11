@@ -41,10 +41,25 @@ LIMITER = "alimiter=limit=0.97:level=false:latency=true"
 MAX_TEMPO_CHANGE = 0.06
 
 
+def _dl_url(path: Path):
+    """The /downloads/ URL for a library track, folders and all.
+
+    Rebuilding from path.name alone would drop the folder a song is filed
+    into and hand back a URL that no longer resolves.
+    """
+    try:
+        return "/downloads/" + Path(path).resolve().relative_to(DL_DIR.resolve()).as_posix()
+    except ValueError:
+        return f"/downloads/{Path(path).name}"
+
+
 def _resolve(url_path: str):
+    """A /downloads/ URL to a local path. Library folders make these several
+    segments deep, so the file only has to sit somewhere under DL_DIR."""
     if url_path.startswith("/downloads/"):
-        p = (DL_DIR / Path(url_path).name).resolve()
-        if p.parent == DL_DIR.resolve() and p.is_file():
+        root = DL_DIR.resolve()
+        p = (root / url_path[len("/downloads/"):].strip("/")).resolve()
+        if p.is_file() and root in p.parents:
             return p
     return None
 
@@ -1503,7 +1518,7 @@ def _match_entry(fa, siga, fb, sigb, path, sim=None, meta_a=None, meta_b=None,
     if scored is None:
         return None
     match, reasons, style, ratio = scored
-    return {"file": f"/downloads/{path.name}", "name": path.name,
+    return {"file": _dl_url(path), "name": path.name,
             "match": match,
             "bpm": fb.get("bpm") or None, "camelot": fb.get("camelot"),
             "genre": (meta_b or {}).get("genre"),
@@ -1525,9 +1540,10 @@ def _is_render(name: str) -> bool:
 
 
 def _library_tracks():
-    return [p for p in sorted(DL_DIR.iterdir())
-            if p.suffix.lower() in AUDIO_EXTS and not p.name.startswith(".")
-            and not _is_render(p.name)]
+    # rglob, not iterdir: songs filed into library folders are still library.
+    return [p for p in sorted(DL_DIR.rglob("*"))
+            if p.is_file() and p.suffix.lower() in AUDIO_EXTS
+            and not p.name.startswith(".") and not _is_render(p.name)]
 
 
 def _timbre_space(extra=()):
@@ -1783,7 +1799,7 @@ def _suggest_job(job, seed: Path):
             if dkey not in best or entry["match"] > best[dkey]["match"]:
                 best[dkey] = entry
         matches = sorted(best.values(), key=lambda m: -m["match"])
-        job["seed"] = {"name": seed.name, "file": f"/downloads/{seed.name}",
+        job["seed"] = {"name": seed.name, "file": _dl_url(seed),
                        "bpm": fa.get("bpm"), "camelot": fa.get("camelot")}
         job["matches"] = matches[:10]
         job["rated"] = _rating_count()
@@ -1846,7 +1862,7 @@ def _set_plan_job(job, paths):
             facts.append(analysis.analyze(p))
             sigs.append(analysis.style_signals(p))
         order, bpms = _order_tracks(paths, grids, facts)
-        tracks = [{"file": f"/downloads/{Path(paths[i]).name}", "name": Path(paths[i]).name,
+        tracks = [{"file": _dl_url(paths[i]), "name": Path(paths[i]).name,
                    "bpm": bpms[i], "camelot": facts[i].get("camelot")}
                   for i in order]
         joins = []

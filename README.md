@@ -39,6 +39,61 @@ controls, and a reduced-motion option.
 | **MIDI** | Turn a single-note melody or bass line into editable MIDI. Best with an isolated stem, not a full arrangement. |
 | **Library** | A file browser for everything the app makes and holds: folders you create, rename, nest, and drag songs into, plus search, sorting, previews, and a track sent straight to the DJ mixer. |
 
+## A look around
+
+Every shot below is the real interface on a working library — no mockups.
+
+### DJ mixer
+
+Two decks with measured BPM and key, phrase and energy waveforms with editable
+handover markers, three mixing directions, and the rendered mix underneath.
+
+![The DJ mixer with both decks loaded and a rendered transition](docs/assets/dj-mixer.jpg)
+
+### Library
+
+Sources down the side, real folders in the middle. Drag songs onto a folder to
+file them, rename in place, search from wherever you are.
+
+![The Library browsing a folder of house records](docs/assets/library.jpg)
+
+### Sets
+
+Pick the records, let the planner order them, adjust each join, then render one
+continuous mix with a timestamped tracklist.
+
+![A four-track set planned and rendered with its tracklist](docs/assets/sets.jpg)
+
+### Stems
+
+Separate a track into its parts, then rebalance them on faders and export the
+result.
+
+![Separated vocals and instrumental above the stem fader room](docs/assets/stems.jpg)
+
+### Import
+
+Paste a link and pick a format, or trim and convert a file you already have.
+
+![The import panel showing available formats beside a trim editor](docs/assets/import.jpg)
+
+### Karaoke
+
+Choose what to mute, and the renderer writes an MP4 with word-synced lyrics.
+
+![The karaoke panel after rendering a video](docs/assets/karaoke.jpg)
+
+A frame from the MP4 it produced — sung words in amber, the current line in
+white, the next line waiting below:
+
+![A frame of the rendered karaoke video showing word-highlighted lyrics](docs/assets/karaoke-video-frame.jpg)
+
+### MIDI
+
+Transcribe an isolated stem into notes and download the `.mid`.
+
+![A vocal stem transcribed to a piano roll of 31 notes](docs/assets/midi.jpg)
+
 ## A mixer with three directions
 
 **Natural** keeps the original recordings and looks for a restrained, phrase-aware
