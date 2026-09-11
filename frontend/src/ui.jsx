@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { Waveform } from './Waveform'
+import { postJSON } from './api'
 
 /* ---------- BPM + key badges (server-side files only) ---------- */
 export function TrackFacts({ url }) {
@@ -124,8 +125,78 @@ export function Status({ busy, text, pct, error }) {
   )
 }
 
+/* ---------- keep a rendered result as a library source ---------- */
+export function SaveToLibrary({ url, name }) {
+  const [dests, setDests] = useState(null)   // destination folders, once fetched
+  const [picking, setPicking] = useState(false)
+  const [state, setState] = useState(null)   // 'busy' | { saved } | { error }
+  const box = useRef()
+
+  useEffect(() => {
+    if (!picking) return
+    const close = e => { if (!box.current?.contains(e.target)) setPicking(false) }
+    window.addEventListener('click', close)
+    return () => window.removeEventListener('click', close)
+  }, [picking])
+
+  async function save(dir) {
+    setPicking(false)
+    setState('busy')
+    try {
+      const d = await postJSON('/library/save', { file: url, dir, name })
+      setState({ saved: d.file.slice(1).split('/').slice(0, -1).join(' / ') })
+    } catch (e) {
+      setState({ error: e.message })
+    }
+  }
+
+  // Downloads and its folders only: that is where the decks and playlists look.
+  async function open() {
+    let list = dests
+    if (!list) {
+      try {
+        const d = await (await fetch('/library')).json()
+        list = [{ path: '/downloads', label: 'Downloads', depth: 0 }].concat(
+          (d.folders || [])
+            .filter(f => f.kind === 'downloads')
+            .map(f => ({ path: f.path, label: f.name, depth: f.path.split('/').length - 2 }))
+            .sort((a, b) => a.path.localeCompare(b.path)))
+      } catch {
+        list = [{ path: '/downloads', label: 'Downloads', depth: 0 }]
+      }
+      setDests(list)
+    }
+    if (list.length === 1) save(list[0].path)   // nothing to choose between yet
+    else setPicking(p => !p)
+  }
+
+  if (state?.saved) {
+    return <span className="chip saved" title={`Saved into ${state.saved}`}>✓ In {state.saved.split(' / ').pop()}</span>
+  }
+  return (
+    <span className="save-wrap" ref={box}>
+      <button className="chip" onClick={open} disabled={state === 'busy'}
+        title="Keep a copy in your library so you can mix it again">
+        {state === 'busy' ? 'saving…' : 'Save to library'}
+      </button>
+      {state?.error && <span className="wave-hint bad">{state.error}</span>}
+      {picking && (
+        <ul className="save-menu" role="menu">
+          <li className="save-menu-head">Save into</li>
+          {dests.map(d => (
+            <li key={d.path}>
+              <button role="menuitem" style={{ paddingLeft: 11 + d.depth * 12 }}
+                onClick={() => save(d.path)}>{d.label}</button>
+            </li>
+          ))}
+        </ul>
+      )}
+    </span>
+  )
+}
+
 /* ---------- result card with player ---------- */
-export function MediaCard({ title, url, video, actions, accent, marks }) {
+export function MediaCard({ title, url, video, actions, accent, marks, keep = true }) {
   const safe = encodeURI(url)
   const name = decodeURIComponent(url.split('/').pop())
   return (
@@ -135,7 +206,9 @@ export function MediaCard({ title, url, video, actions, accent, marks }) {
         {!video && <TrackFacts url={url} />}
         <span className="media-actions">
           {actions}
-          <a className="chip" href={safe} download={name}>Download</a>
+          {keep && <SaveToLibrary url={url} name={name} />}
+          <a className="chip" href={safe} download={name}
+            title="Save it to your computer's Downloads folder">Download</a>
         </span>
       </div>
       {video ? <video controls src={safe} /> : <Waveform src={safe} height={72} accent={accent} marks={marks} />}

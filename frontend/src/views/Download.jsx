@@ -106,7 +106,7 @@ export function DownloadView({ onExtract, onStudio, onKaraoke }) {
 
       {result && result.video && (
         <div className="results">
-          <MediaCard title={result.title} url={result.file} video />
+          <MediaCard title={result.title} url={result.file} video keep={false} />
         </div>
       )}
       {result && !result.video && (

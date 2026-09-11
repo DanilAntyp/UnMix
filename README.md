@@ -37,7 +37,7 @@ controls, and a reduced-motion option.
 | **Sets** | Arrange a playlist and render a continuous mix with per-transition controls. |
 | **Karaoke** | Remove selected instruments and render an MP4 with synchronized, word-highlighted lyrics. |
 | **MIDI** | Turn a single-note melody or bass line into editable MIDI. Best with an isolated stem, not a full arrangement. |
-| **Library** | Browse, search, preview, and manage your sources and exports. Send a track straight to the DJ mixer. |
+| **Library** | A file browser for everything the app makes and holds: folders you create, rename, nest, and drag songs into, plus search, sorting, previews, and a track sent straight to the DJ mixer. |
 
 ## A mixer with three directions
 
@@ -114,6 +114,11 @@ karaoke/        Lyric videos
 converted/      Converted and trimmed exports
 midi/           Transcribed notes
 ```
+
+Folders you make in the Library are real subdirectories of these, so the filing you
+do in the app is the filing you see in Finder. The six top-level directories
+themselves are fixed: the app writes into them, so they cannot be renamed or removed
+from the Library.
 
 Analysis caches, listening ratings, learned preferences, local credentials, model
 weights, and audio/video/MIDI files are ignored by Git too. The built frontend

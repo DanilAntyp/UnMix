@@ -11,7 +11,10 @@ export async function postJSON(url, body) {
 
 export async function postForm(url, fd) {
   const res = await fetch(url, { method: 'POST', body: fd })
-  const data = await res.json()
+  // an oversized upload is rejected by Flask with an HTML page, not JSON
+  const data = await res.json().catch(() => ({
+    error: res.status === 413 ? 'that file is too large to upload' : `request failed (${res.status})`,
+  }))
   if (!res.ok) throw new Error(data.error || 'request failed')
   return data
 }

@@ -9,9 +9,11 @@ Plus: Karaoke Mode in a separate window (see karaoke.py).
 Run:  python app.py   ->  http://localhost:5555
 """
 import re
+import shutil
 import subprocess
 import tempfile
 import threading
+import time
 import webbrowser
 from pathlib import Path
 
@@ -735,8 +737,8 @@ def separate():
     server_file = data.get("server_file", "")
     if server_file.startswith("/downloads/"):
         # Resolve strictly inside DL_DIR to keep path traversal out.
-        path = (DL_DIR / Path(server_file).name).resolve()
-        if path.parent == DL_DIR.resolve() and path.is_file():
+        path = resolve_served(server_file)
+        if path is not None:
             try:
                 return jsonify(run_separation(path, path.stem, remove, model))
             except Exception as e:
@@ -768,11 +770,16 @@ SERVED_DIRS = {"/downloads/": DL_DIR, "/separated/": OUT_DIR, "/converted/": CON
 
 
 def resolve_served(url_path: str):
-    """Map a /downloads|separated|converted/ URL back to a safe local path."""
+    """Map a /downloads|separated|converted/ URL back to a safe local path.
+
+    Library folders mean these URLs can be several segments deep, so the file
+    only has to sit somewhere under its root — not directly in it.
+    """
     for prefix, base in SERVED_DIRS.items():
         if url_path.startswith(prefix):
-            p = (base / Path(url_path).name).resolve()
-            if p.parent == base.resolve() and p.is_file():
+            root = base.resolve()
+            p = (root / url_path[len(prefix):].strip("/")).resolve()
+            if p.is_file() and root in p.parents:
                 return p
     return None
 
@@ -841,9 +848,12 @@ def upload():
 @app.get("/files")
 def list_files():
     exts = {".mp3", ".wav", ".flac", ".m4a", ".ogg", ".aac"}
-    files = sorted((p for p in DL_DIR.iterdir() if p.suffix.lower() in exts),
+    files = sorted((p for p in DL_DIR.rglob("*")
+                    if p.suffix.lower() in exts and not p.name.startswith(".")),
                    key=lambda p: p.stat().st_mtime, reverse=True)
-    return jsonify(files=[{"name": p.name, "file": f"/downloads/{p.name}"} for p in files[:60]])
+    return jsonify(files=[{"name": p.relative_to(DL_DIR).as_posix(),
+                           "file": "/downloads/" + p.relative_to(DL_DIR).as_posix()}
+                          for p in files[:200]])
 
 
 @app.post("/studio/export")
@@ -890,61 +900,279 @@ LIBRARY_DIRS = {
     "karaoke": (APP_DIR / "karaoke", "/karaoke/video/"),
     "midi": (MIDI_DIR, "/midi/"),
 }
+LIBRARY_LABELS = {
+    "downloads": "Downloads", "stems": "Stems", "converted": "Converted",
+    "mixes": "DJ mixes", "karaoke": "Karaoke", "midi": "MIDI",
+}
 MEDIA_EXTS = {".mp3", ".wav", ".flac", ".m4a", ".ogg", ".aac", ".mp4", ".mid"}
+LIB_MAX_ENTRIES = 4000  # a whole-tree listing the browser can still hold happily
+LIB_MAX_DEPTH = 10      # deep enough for real filing, shallow enough to stay quick
+
+
+def _lib_owner(url_path: str):
+    """(kind, base, prefix) of the root directory a library URL belongs to."""
+    for kind, (base, prefix) in LIBRARY_DIRS.items():
+        if url_path == prefix.rstrip("/") or url_path.startswith(prefix):
+            return kind, base, prefix
+    return None
+
+
+def _lib_path(url_path: str):
+    """Map a library URL to a real path, refusing anything outside its root.
+
+    Folders make these URLs multi-segment (/downloads/House/track.mp3), so the
+    old "parent must be the root" test is replaced by a containment check that
+    survives ../ and symlinks pointing elsewhere.
+    """
+    owner = _lib_owner(url_path or "")
+    if owner is None:
+        return None
+    _, base, prefix = owner
+    root = base.resolve()
+    rel = url_path[len(prefix):].strip("/") if url_path.startswith(prefix) else ""
+    p = (root / rel).resolve() if rel else root
+    if p != root and root not in p.parents:
+        return None
+    return p
+
+
+def _lib_file(url_path: str):
+    """_lib_path, but only for something that is actually a file."""
+    p = _lib_path(url_path)
+    return p if p is not None and p.is_file() else None
+
+
+def _lib_url(p: Path):
+    """The library URL for a real path, or None if it sits outside every root."""
+    p = p.resolve()
+    for base, prefix in LIBRARY_DIRS.values():
+        root = base.resolve()
+        if p == root:
+            return prefix.rstrip("/")
+        if root in p.parents:
+            return prefix + p.relative_to(root).as_posix()
+    return None
+
+
+def _lib_is_root(p: Path):
+    """Top-level folders are the app's own output dirs — never user-editable."""
+    return any(p == base.resolve() for base, _ in LIBRARY_DIRS.values())
+
+
+def _lib_name(raw):
+    """A folder or file name the OS and the rest of the app can live with."""
+    name = re.sub(r"[/\\\x00]", "", raw or "").strip().strip(".")
+    return name[:120] or None
+
+
+def _lib_unique(target: Path):
+    """A free path near `target`, so an import never overwrites what is there."""
+    if not target.exists():
+        return target
+    for n in range(2, 1000):
+        alt = target.with_name(f"{target.stem} ({n}){target.suffix}")
+        if not alt.exists():
+            return alt
+    return target.with_name(f"{target.stem} ({int(time.time())}){target.suffix}")
+
+
+def _lib_entry(p: Path, kind: str, url: str):
+    st = p.stat()
+    ext = p.suffix.lower()
+    return {"name": p.name, "kind": kind, "file": url, "dir": url.rsplit("/", 1)[0],
+            "size": st.st_size, "mtime": int(st.st_mtime),
+            "video": ext == ".mp4", "midi": ext == ".mid"}
 
 
 @app.get("/library")
 def library():
-    items = []
+    """The whole media tree in one response: roots, folders, files.
+
+    A few thousand entries is small enough to send at once, and having the tree
+    client-side is what lets the browser open folders, search and re-sort
+    without another round trip.
+    """
+    roots, folders, items = [], [], []
+    truncated = False
     for kind, (base, prefix) in LIBRARY_DIRS.items():
+        root_url = prefix.rstrip("/")
+        roots.append({"kind": kind, "label": LIBRARY_LABELS.get(kind, kind),
+                      "path": root_url})
         if not base.exists():
             continue
-        for p in base.iterdir():
-            if p.suffix.lower() not in MEDIA_EXTS or p.name.startswith("."):
+        stack = [(base, root_url, 0)]
+        while stack and not truncated:
+            d, d_url, depth = stack.pop()
+            try:
+                children = sorted(d.iterdir(), key=lambda c: c.name.lower())
+            except OSError:
                 continue
-            st = p.stat()
-            items.append({"name": p.name, "kind": kind, "file": f"{prefix}{p.name}",
-                          "size": st.st_size, "mtime": int(st.st_mtime),
-                          "video": p.suffix.lower() == ".mp4",
-                          "midi": p.suffix.lower() == ".mid"})
+            for c in children:
+                if c.name.startswith("."):
+                    continue
+                if len(items) + len(folders) >= LIB_MAX_ENTRIES:
+                    truncated = True
+                    break
+                c_url = f"{d_url}/{c.name}"
+                try:
+                    if c.is_dir():
+                        if c.is_symlink() or depth >= LIB_MAX_DEPTH:
+                            continue
+                        folders.append({"name": c.name, "kind": kind, "path": c_url,
+                                        "dir": d_url, "mtime": int(c.stat().st_mtime)})
+                        stack.append((c, c_url, depth + 1))
+                    elif c.suffix.lower() in MEDIA_EXTS:
+                        items.append(_lib_entry(c, kind, c_url))
+                except OSError:
+                    continue
     items.sort(key=lambda x: -x["mtime"])
-    return jsonify(items=items[:500])
+    return jsonify(roots=roots, folders=folders, items=items, truncated=truncated)
 
 
-def _resolve_library(url_path: str):
-    for kind, (base, prefix) in LIBRARY_DIRS.items():
-        if url_path.startswith(prefix):
-            p = (base / Path(url_path).name).resolve()
-            if p.parent == base.resolve() and p.is_file():
-                return p
-    return None
+@app.post("/library/folder")
+def library_folder():
+    """Make a new folder inside an existing library folder."""
+    data = request.get_json(silent=True) or {}
+    parent = _lib_path(data.get("dir", ""))
+    name = _lib_name(data.get("name"))
+    if parent is None or not parent.is_dir():
+        return jsonify(error="that folder is gone"), 404
+    if not name:
+        return jsonify(error="give the folder a name"), 400
+    dest = parent / name
+    if dest.exists():
+        return jsonify(error=f"'{name}' already exists here"), 400
+    dest.mkdir()
+    return jsonify(ok=True, path=_lib_url(dest), name=name)
+
+
+@app.post("/library/move")
+def library_move():
+    """Where a drag lands: move files and folders into another folder."""
+    data = request.get_json(silent=True) or {}
+    dest = _lib_path(data.get("dir", ""))
+    if dest is None or not dest.is_dir():
+        return jsonify(error="that folder is gone"), 404
+    moved, errors = [], []
+    for url in data.get("files") or []:
+        src = _lib_path(url)
+        if src is None or not src.exists():
+            errors.append(f"{Path(url).name or url}: not found")
+        elif _lib_is_root(src):
+            errors.append(f"{src.name}: top-level folders stay put")
+        elif src.parent == dest:
+            continue  # dropped back where it already lives
+        elif src.is_dir() and (src == dest or src in dest.parents):
+            errors.append(f"{src.name}: a folder cannot go inside itself")
+        elif (dest / src.name).exists():
+            errors.append(f"{src.name}: already in that folder")
+        else:
+            try:
+                shutil.move(str(src), str(dest / src.name))
+                moved.append(_lib_url(dest / src.name))
+            except OSError as e:
+                errors.append(f"{src.name}: {e.strerror or e}")
+    if errors and not moved:
+        return jsonify(error="; ".join(errors[:3])), 400
+    return jsonify(ok=True, moved=moved, errors=errors)
+
+
+@app.post("/library/upload")
+def library_upload():
+    """Add music from the desktop straight into the folder that is open."""
+    dest = _lib_path(request.form.get("dir") or "/downloads")
+    if dest is None or not dest.is_dir():
+        return jsonify(error="that folder is gone"), 404
+    added, errors = [], []
+    for f in request.files.getlist("files"):
+        name = _lib_name(Path(f.filename or "").name)
+        if not name:
+            continue
+        if Path(name).suffix.lower() not in MEDIA_EXTS:
+            errors.append(f"{name}: not an audio or video file this app reads")
+            continue
+        target = _lib_unique(dest / name)
+        f.save(target)
+        added.append(_lib_url(target))
+    if errors and not added:
+        return jsonify(error="; ".join(errors[:3])), 400
+    return jsonify(ok=True, added=added, errors=errors)
+
+
+@app.post("/library/save")
+def library_save():
+    """Keep a rendered mix, stem or karaoke video as a library source.
+
+    The original stays in the output directory it was rendered into; this puts a
+    copy where the decks and playlists look for material, so a finished mix can
+    be mixed again.
+    """
+    data = request.get_json(silent=True) or {}
+    src = _lib_file(data.get("file", ""))
+    dest = _lib_path(data.get("dir") or "/downloads")
+    if src is None:
+        return jsonify(error="that file is gone"), 404
+    if dest is None or not dest.is_dir():
+        return jsonify(error="that folder is gone"), 404
+    name = _lib_name(data.get("name")) or src.name
+    if Path(name).suffix.lower() != src.suffix.lower():
+        name += src.suffix
+    if (dest / name).resolve() == src:
+        return jsonify(error="it is already saved there"), 400
+    target = _lib_unique(dest / name)
+    try:
+        shutil.copy2(src, target)
+    except OSError as e:
+        return jsonify(error=f"could not save it: {e.strerror or e}"), 500
+    return jsonify(ok=True, file=_lib_url(target), name=target.name)
 
 
 @app.post("/library/delete")
 def library_delete():
+    """Remove files and folders. A folder takes everything inside it."""
     data = request.get_json(silent=True) or {}
-    p = _resolve_library(data.get("file", ""))
-    if p is None:
-        return jsonify(error="file not found"), 404
-    p.unlink()
-    return jsonify(ok=True)
+    targets = data.get("files") or ([data["file"]] if data.get("file") else [])
+    removed, errors = 0, []
+    for url in targets:
+        p = _lib_path(url)
+        if p is None or not p.exists():
+            errors.append(f"{Path(url).name or url}: not found")
+            continue
+        if _lib_is_root(p):
+            errors.append(f"{p.name}: top-level folders stay put")
+            continue
+        try:
+            shutil.rmtree(p) if p.is_dir() else p.unlink()
+            removed += 1
+        except OSError as e:
+            errors.append(f"{p.name}: {e.strerror or e}")
+    if errors and not removed:
+        return jsonify(error="; ".join(errors[:3])), 404
+    return jsonify(ok=True, removed=removed, errors=errors)
 
 
 @app.post("/library/rename")
 def library_rename():
     data = request.get_json(silent=True) or {}
-    p = _resolve_library(data.get("file", ""))
-    new_name = re.sub(r"[/\\\x00]", "", (data.get("name") or "").strip())
-    if p is None or not new_name:
+    p = _lib_path(data.get("file") or data.get("path") or "")
+    name = _lib_name(data.get("name"))
+    if p is None or not p.exists():
+        return jsonify(error="file not found"), 404
+    if not name:
         return jsonify(error="bad request"), 400
-    dest = p.with_name(new_name + p.suffix)
+    if p.is_dir():
+        dest = p.with_name(name)
+    else:
+        # callers pass either a bare title (the recognizer does) or the whole
+        # filename shown in the browser; the extension is kept either way.
+        stem = Path(name).stem if Path(name).suffix.lower() == p.suffix.lower() else name
+        dest = p.with_name(stem + p.suffix)
+    if dest == p:
+        return jsonify(ok=True, file=_lib_url(p), path=_lib_url(p), name=p.name)
     if dest.exists():
         return jsonify(error="a file with that name already exists"), 400
     p.rename(dest)
-    for kind, (base, prefix) in LIBRARY_DIRS.items():
-        if dest.parent == base.resolve():
-            return jsonify(ok=True, file=f"{prefix}{dest.name}", name=dest.name)
-    return jsonify(ok=True, name=dest.name)
+    return jsonify(ok=True, file=_lib_url(dest), path=_lib_url(dest), name=dest.name)
 
 
 ACOUSTID_KEYS = ("cSpUJKpD", "v8pQ6oyB")  # tried in order; overridable via acoustid_key.txt
@@ -1000,7 +1228,7 @@ def _recognize_file(p):
 def recognize():
     """Identify a track: chromaprint fingerprint -> AcoustID -> artist/title."""
     data = request.get_json(silent=True) or {}
-    p = _resolve_library(data.get("file", ""))
+    p = _lib_file(data.get("file", ""))
     if p is None:
         return jsonify(error="file not found"), 404
     try:
@@ -1068,7 +1296,8 @@ def _web_suggest_job(job, seed_path):
                 pool += (_dz_get(f"https://api.deezer.com/artist/{ra['id']}/top?limit=5")
                          .get("data") or [])
 
-        have = [_slug(p.name) for p in DL_DIR.iterdir() if not p.name.startswith(".")]
+        have = [_slug(p.name) for p in DL_DIR.rglob("*")
+                if p.is_file() and not p.name.startswith(".")]
 
         def in_library(t):
             a, ti = _slug(t["artist"]["name"]), _slug(t["title"])
@@ -1143,7 +1372,7 @@ def _web_suggest_job(job, seed_path):
 def dj_suggest_web():
     import uuid as _uuid
     data = request.get_json(silent=True) or {}
-    p = _resolve_library(data.get("file", ""))
+    p = _lib_file(data.get("file", ""))
     if p is None:
         return jsonify(error="pick a track first"), 400
     job_id = _uuid.uuid4().hex[:12]
