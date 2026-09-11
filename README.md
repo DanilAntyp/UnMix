@@ -34,7 +34,7 @@ controls, and a reduced-motion option.
 | **Import** | Download from a YouTube link, choose audio/video quality, or convert and trim local files. |
 | **Stems** | Isolate vocals, drums, bass, and other instruments with Demucs. Choose the six-stem model for guitar and piano, then rebalance the stems. |
 | **DJ mixer** | Load two decks, inspect phrase and energy waveforms, adjust handover markers, and audition alternative transitions before exporting. |
-| **Sets** | Arrange a playlist and render a continuous mix with per-transition controls. |
+| **Sets** | Pick records through the same folder browser as the Library, with search across every folder, then arrange the playlist and render a continuous mix with per-transition controls. |
 | **Karaoke** | Remove selected instruments and render an MP4 with synchronized, word-highlighted lyrics. |
 | **MIDI** | Turn a single-note melody or bass line into editable MIDI. Best with an isolated stem, not a full arrangement. |
 | **Library** | A file browser for everything the app makes and holds: folders you create, rename, nest, and drag songs into, plus search, sorting, previews, and a track sent straight to the DJ mixer. |
@@ -59,8 +59,14 @@ file them, rename in place, search from wherever you are.
 
 ### Sets
 
-Pick the records, let the planner order them, adjust each join, then render one
-continuous mix with a timestamped tracklist.
+Pick the records from the same folder browser the Library uses — walk the
+folders, or search across all of them; ticks survive both, and what you have
+chosen so far stays listed underneath.
+
+![Choosing set tracks from a folder, with the running selection below](docs/assets/sets-picker.jpg)
+
+Then let the planner order them, adjust each join, and render one continuous
+mix with a timestamped tracklist.
 
 ![A four-track set planned and rendered with its tracklist](docs/assets/sets.jpg)
 

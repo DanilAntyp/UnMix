@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { postJSON } from '../api'
-import { Status, MediaCard, PanelHead, TrackFacts, IconNote } from '../ui'
+import { Status, MediaCard, PanelHead, IconNote } from '../ui'
+import { TrackPicker } from '../TrackPicker'
 import { LiquidMetalButton } from '../LiquidMetalButton'
 import { Waveform, fmtTime } from '../Waveform'
 import { TransitionLane } from '../TransitionLane'
@@ -33,6 +34,7 @@ function tracklistText(tracklist) {
 
 export function SetView() {
   const [files, setFiles] = useState([])
+  const [folders, setFolders] = useState([])
   const [picked, setPicked] = useState({})
   const [beats, setBeats] = useState('auto')
   const [plan, setPlan] = useState(null)       // {tracks, joins}
@@ -46,7 +48,13 @@ export function SetView() {
   const previewPollRef = useRef({})   // join idx -> timer, so previews can be stopped too
 
   useEffect(() => {
-    fetch('/files').then(r => r.json()).then(d => setFiles(d.files || [])).catch(() => {})
+    fetch('/library')
+      .then(r => r.json())
+      .then(d => {
+        setFiles((d.items || []).filter(i => i.kind === 'downloads' && !i.video && !i.midi))
+        setFolders((d.folders || []).filter(f => f.kind === 'downloads'))
+      })
+      .catch(() => {})
     return () => {
       clearTimeout(pollRef.current)
       Object.values(previewPollRef.current).forEach(clearTimeout)
@@ -235,19 +243,13 @@ export function SetView() {
       />
       {!plan && (
         <>
-          <div className="setlist">
-            {files.map(f => (
-              <label key={f.file} className={'set-row' + (picked[f.file] ? ' on' : '')}>
-                <input type="checkbox" checked={!!picked[f.file]}
-                  onChange={e => setPicked(p => ({ ...p, [f.file]: e.target.checked }))} />
-                <span className="set-name">{f.name}</span>
-                {picked[f.file] && <TrackFacts url={f.file} />}
-              </label>
-            ))}
-            {!files.length && <div className="wave-hint">no tracks yet — download some first</div>}
-          </div>
+          <TrackPicker
+            tracks={files} folders={folders} picked={picked}
+            onToggle={(file, on) => setPicked(p => ({ ...p, [file]: on }))}
+            onClear={() => setPicked({})}
+          />
           <div className="dj-controls">
-            <span className="wave-hint">{chosen.length} tracks selected</span>
+            <span className="wave-hint">{chosen.length} track{chosen.length === 1 ? '' : 's'} selected</span>
             <select value={beats}
               onChange={e => setBeats(e.target.value === 'auto' ? 'auto' : parseInt(e.target.value))}
               className="slot-select" style={{ maxWidth: 170, marginBottom: 0 }}>

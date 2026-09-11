@@ -231,3 +231,23 @@ select option { background:#18141f !important; color:#f8f7fa; }
 .save-menu button { display:block; width:100%; padding:7px 11px; border:0; border-radius:9px; background:none; color:#cfc9da; font-size:12px; text-align:left; white-space:nowrap; cursor:pointer; }
 .save-menu button:hover { background:var(--accent); color:var(--on-accent); }
 .chip.saved { background:#c4ff621f; border-color:#c4ff6255; color:var(--accent); cursor:default; }
+
+/* ---------- set builder: the library's browser, with ticks instead of drags ---------- */
+.pick-pane { min-height:270px; max-height:410px; margin-bottom:13px; }
+.pick-pane .fin-item { width:100%; border:0; background:none; text-align:left; font-family:inherit; cursor:pointer; }
+.pick-pane .fin-item.on { background:#c4ff6216; }
+.pick-pane .fin-item.on .fin-label { color:#fff; }
+.pick-box { width:15px; height:15px; flex-shrink:0; margin:0; accent-color:var(--accent); cursor:pointer; }
+.pick-folder { color:var(--text); }
+.pick-into { flex-shrink:0; color:#6f6880; }
+.pick-folder:hover .pick-into { color:var(--accent); }
+.pick-track .facts { flex-shrink:0; }
+.pick-bar { display:flex; align-items:center; gap:7px; flex-wrap:wrap; padding:12px 14px; margin-bottom:13px; border:1px solid #c4ff6230; border-radius:17px; background:#c4ff6208; }
+.pick-chip { display:inline-flex; align-items:center; gap:6px; max-width:270px; padding:6px 10px; border:1px solid #ffffff1a; border-radius:99px; background:#ffffff08; color:#e4ddec; font-size:11px; cursor:pointer; }
+.pick-chip span { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.pick-chip:hover { border-color:#ff8a8a55; color:#ffb3b3; }
+.pick-chip svg { flex-shrink:0; opacity:.6; }
+@media (max-width:760px) {
+  .pick-pane .fin-c-size { display:none; }
+  .pick-chip { max-width:100%; }
+}
